@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { REVIEW_FLAGS } from "@/lib/ai/safety";
+import { createHash } from "node:crypto";
+import { REVIEW_FLAGS, detectReviewFlags } from "@/lib/ai/safety";
 import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { requireCurrentTenant } from "@/lib/auth/current-tenant";
 import { db } from "@/lib/db";
+import { latestInbound, replyAllRecipients } from "@/lib/gmail/recipients";
+
+const hash = (value: string) =>
+  createHash("sha256").update(value, "utf8").digest("hex");
 
 const actionSchema = z.discriminatedUnion("action", [
   z
@@ -31,11 +36,38 @@ export async function PATCH(
   const input = actionSchema.parse(await request.json());
   const option = await db.replyOption.findUniqueOrThrow({
     where: { id },
-    include: { thread: true, generation: true },
+    include: {
+      thread: {
+        include: {
+          gmailConnection: true,
+          messages: {
+            orderBy: { sentAt: "asc" },
+            include: { attachments: true },
+          },
+        },
+      },
+      generation: true,
+    },
   });
   const principal = await requireCurrentTenant(option.thread.tenantId);
+  const inbound = latestInbound(
+    option.thread.messages,
+    option.thread.gmailConnection.emailAddress,
+  );
+  const recipients = inbound
+    ? replyAllRecipients(inbound, option.thread.gmailConnection.emailAddress)
+    : null;
+  if (!inbound || !recipients?.to.length)
+    return NextResponse.json({ error: "no_reply_recipient" }, { status: 409 });
+  const currentFlags = detectReviewFlags(option.thread, {
+    body: option.body,
+    intent: option.intent,
+    identity: option.generation?.identity,
+    closing: option.generation?.closing,
+    recipients: [...recipients.to, ...recipients.cc],
+  });
   if (input.action === "approve") {
-    const missing = (option.generation?.requiredReviewFlags ?? []).filter(
+    const missing = currentFlags.filter(
       (flag) =>
         !input.acknowledgements.includes(flag as (typeof REVIEW_FLAGS)[number]),
     );
@@ -57,13 +89,19 @@ export async function PATCH(
     if (input.action === "approve") {
       await tx.replyGeneration.update({
         where: { id: option.generationId! },
-        data: { acknowledgedFlags: input.acknowledgements },
+        data: {
+          acknowledgedFlags: input.acknowledgements,
+          requiredReviewFlags: currentFlags,
+        },
       });
       await tx.gmailDraft.create({
         data: {
           threadId: option.threadId,
           replyOptionId: option.id,
           body: option.body,
+          toAddresses: recipients.to,
+          ccAddresses: recipients.cc,
+          sourceMessageId: inbound.id,
           status: "APPROVED",
         },
       });
@@ -90,10 +128,23 @@ export async function PATCH(
               ? {
                   acknowledgements: input.acknowledgements,
                   version: option.version,
+                  bodyHash: hash(option.body),
+                  recipients: [...recipients.to, ...recipients.cc],
+                  recipientsHash: hash(JSON.stringify(recipients)),
+                  requiredReviewFlags: currentFlags,
                 }
               : {
                   version: targetVersion,
                   contentChanged: targetBody !== option.body,
+                  beforeBodyHash: hash(option.body),
+                  afterBodyHash: hash(targetBody),
+                  requiredReviewFlags: detectReviewFlags(option.thread, {
+                    body: targetBody,
+                    intent: option.intent,
+                    identity: option.generation?.identity,
+                    closing: option.generation?.closing,
+                    recipients: [...recipients.to, ...recipients.cc],
+                  }),
                 },
       },
     });
@@ -103,5 +154,15 @@ export async function PATCH(
     id: result.id,
     action: input.action,
     version: result.version,
+    requiredReviewFlags:
+      input.action === "edit"
+        ? detectReviewFlags(option.thread, {
+            body: result.body,
+            intent: option.intent,
+            identity: option.generation?.identity,
+            closing: option.generation?.closing,
+            recipients: [...recipients.to, ...recipients.cc],
+          })
+        : currentFlags,
   });
 }

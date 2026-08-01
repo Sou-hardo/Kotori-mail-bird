@@ -97,13 +97,17 @@ export async function enqueueSync(
   return record;
 }
 
-export function enqueueAnalysis(tenantId: string, threadId: string) {
+export function enqueueAnalysis(
+  tenantId: string,
+  threadId: string,
+  version = "manual",
+) {
   return enqueueOperationalJob(
     QUEUES.analysis,
     tenantId,
     "ai.thread.analyze",
-    { threadId },
-    threadId,
+    { threadId, version },
+    `${threadId}:${version}`,
   );
 }
 

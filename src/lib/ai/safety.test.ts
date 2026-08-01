@@ -20,21 +20,39 @@ describe("deterministic review gates", () => {
     ["I promise we will deliver by Friday", "DEADLINE_OR_PROMISE"],
     ["Please review the attached document", "MISSING_ATTACHMENT"],
   ])("flags %s", (body, expected) => {
-    expect(detectReviewFlags({ messages: [message(body)] })).toContain(
-      expected,
-    );
+    expect(
+      detectReviewFlags(
+        { messages: [message(body)] },
+        expected === "MISSING_ATTACHMENT" ? { body } : {},
+      ),
+    ).toContain(expected);
   });
 
   it("flags multiple recipients", () => {
     expect(
-      detectReviewFlags({
-        messages: [
-          message("Hello", {
-            toAddresses: ["one@example.com", "two@example.com"],
-          }),
-        ],
-      }),
+      detectReviewFlags(
+        { messages: [message("Hello")] },
+        { recipients: ["one@example.com", "two@example.com"] },
+      ),
     ).toContain("MULTIPLE_RECIPIENTS");
+  });
+
+  it("re-evaluates the proposed body, intent and attachment state", () => {
+    const input = { messages: [message("A routine hello")] };
+    expect(
+      detectReviewFlags(input, {
+        intent: "Promise to pay $50,000",
+        body: "I attached the confidential bank account details.",
+        attachmentCount: 0,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "FINANCIAL_COMMITMENT",
+        "SENSITIVE_INFORMATION",
+        "DEADLINE_OR_PROMISE",
+        "MISSING_ATTACHMENT",
+      ]),
+    );
   });
 
   it("treats prompt injection as data, not a special bypass", () => {

@@ -35,10 +35,16 @@ export const replyRequestSchema = z
   .object({
     threadId: z.string().cuid(),
     intent: z.string().trim().min(1).max(200),
-    tone: z.enum(["warm", "professional", "concise", "empathetic", "firm"]),
-    length: z.enum(["short", "medium", "long"]),
-    identity: z.string().trim().min(1).max(200),
-    closing: z.string().trim().min(1).max(200),
+    tone: z.enum([
+      "Professional",
+      "Warm professional",
+      "Friendly",
+      "Direct",
+      "Diplomatic",
+      "Academic",
+    ]),
+    length: z.enum(["short", "standard", "detailed"]),
+    identityId: z.string().cuid(),
     acknowledgements: z.array(z.string()).max(20).default([]),
   })
   .strict();

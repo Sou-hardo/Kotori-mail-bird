@@ -65,12 +65,14 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm test:no-send
+pnpm exec playwright install chromium # first browser-test run only
+pnpm test:e2e
 pnpm db:validate
 pnpm db:generate
 pnpm build
 ```
 
-Tests do not contact Gmail or DeepSeek. Route-level health tests mock the database; Gmail tests use fake clients. GitHub Actions runs the same checks with representative non-secret environment values.
+Tests do not contact Gmail or DeepSeek. Route-level health tests mock the database; Gmail tests use fake clients. Mobile Playwright tests use a production-like composer fixture that exists only when `PLAYWRIGHT_TEST_MODE=1`; it covers responsive rendering, accessibility, exact UI enums, non-2xx handling, and edit/approval acknowledgement flow, but intentionally does not emulate Google OAuth or Gmail itself. GitHub Actions runs the same checks with representative non-secret environment values.
 
 ## VPS production deployment
 

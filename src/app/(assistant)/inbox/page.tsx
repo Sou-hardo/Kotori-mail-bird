@@ -19,11 +19,22 @@ export default async function InboxPage({
   const threads = await db.emailThread.findMany({
     where: {
       tenantId,
+      labelIds: { has: "INBOX" },
       ...(q
         ? {
             OR: [
               { subject: { contains: q, mode: "insensitive" } },
               { snippet: { contains: q, mode: "insensitive" } },
+              {
+                messages: {
+                  some: {
+                    OR: [
+                      { fromAddress: { contains: q, mode: "insensitive" } },
+                      { bodyText: { contains: q, mode: "insensitive" } },
+                    ],
+                  },
+                },
+              },
             ],
           }
         : {}),

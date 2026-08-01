@@ -403,6 +403,9 @@ model GmailDraft {
   status        DraftStatus  @default(SUGGESTED)
   subject       String?
   body          String       @db.Text
+  toAddresses   String[]
+  ccAddresses   String[]
+  sourceMessageId String?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   thread        EmailThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)

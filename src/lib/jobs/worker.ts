@@ -7,6 +7,8 @@ import { syncConnection } from "@/lib/gmail/sync";
 import { enqueueSync, queue, QUEUES, type QueueName } from "@/lib/jobs/queues";
 import { analyzeThread, generateReplies } from "@/lib/ai/service";
 import { runRetentionCleanup } from "@/lib/retention";
+import { sendPushToUser } from "@/lib/push";
+import { enqueueOperationalJob } from "@/lib/jobs/queues";
 
 const connection = {
   url: getServerEnv().REDIS_URL,
@@ -62,7 +64,48 @@ async function execute(job: Job, handler: () => Promise<unknown>) {
   }
 }
 
-const placeholder = (kind: string) => async () => ({ kind, placeholder: true });
+async function processReminder(reminderId: string) {
+  const reminder = await db.followUpReminder.findUnique({
+    where: { id: reminderId },
+  });
+  if (!reminder || reminder.status === "DONE") return { skipped: true };
+  if (reminder.dueAt.getTime() > Date.now())
+    throw new Error("Reminder ran before due time");
+  const notification = await db.notification.create({
+    data: {
+      userId: reminder.userId,
+      threadId: reminder.threadId,
+      kind: "FOLLOW_UP",
+      title: reminder.title,
+      body: reminder.note ?? "Follow-up reminder is due.",
+    },
+  });
+  const membership = await db.membership.findFirst({
+    where: { userId: reminder.userId },
+  });
+  if (membership)
+    await enqueueOperationalJob(
+      QUEUES.push,
+      membership.tenantId,
+      "notification.push",
+      { notificationId: notification.id },
+      notification.id,
+    );
+  return { notificationId: notification.id };
+}
+
+async function processPush(notificationId: string) {
+  const notification = await db.notification.findUniqueOrThrow({
+    where: { id: notificationId },
+  });
+  return sendPushToUser(notification.userId, {
+    title: notification.title,
+    body: notification.body,
+    url: notification.threadId
+      ? `/inbox/${notification.threadId}`
+      : "/notifications",
+  });
+}
 export function startWorkers() {
   const workers: Worker[] = [];
   const create = (
@@ -113,8 +156,20 @@ export function startWorkers() {
       return generateReplies(request, actorId);
     }),
   );
-  create(QUEUES.reminders, (job) => execute(job, placeholder("reminders")));
-  create(QUEUES.push, (job) => execute(job, placeholder("push")));
+  create(QUEUES.reminders, (job) =>
+    execute(job, () => {
+      if (job.name !== "reminder.due")
+        throw new Error(`Unknown reminder job: ${job.name}`);
+      return processReminder(job.data.reminderId as string);
+    }),
+  );
+  create(QUEUES.push, (job) =>
+    execute(job, () => {
+      if (job.name !== "notification.push")
+        throw new Error(`Unknown push job: ${job.name}`);
+      return processPush(job.data.notificationId as string);
+    }),
+  );
   create(QUEUES.retention, (job) => execute(job, () => runRetentionCleanup()));
   void queueRetentionCleanup().catch((error) =>
     console.error("[retention-scheduler]", error),

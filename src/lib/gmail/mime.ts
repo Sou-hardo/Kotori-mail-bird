@@ -2,6 +2,7 @@ export type ReplySource = {
   subject?: string | null;
   fromAddress: string;
   toAddresses: string[];
+  ccAddresses?: string[];
   internetMessageId?: string | null;
   headers?: unknown;
 };
@@ -34,7 +35,11 @@ export function createReplyMime(source: ReplySource, body: string) {
     ? source.subject
     : `Re: ${source.subject || ""}`;
   const headers = [
-    `To: ${cleanHeader(source.fromAddress)}`,
+    `From: ${cleanHeader(source.fromAddress)}`,
+    `To: ${source.toAddresses.map(cleanHeader).join(", ")}`,
+    ...(source.ccAddresses?.length
+      ? [`Cc: ${source.ccAddresses.map(cleanHeader).join(", ")}`]
+      : []),
     `Subject: ${cleanHeader(subject)}`,
     `In-Reply-To: ${cleanHeader(source.internetMessageId)}`,
     `References: ${cleanHeader(references)}`,

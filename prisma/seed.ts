@@ -58,7 +58,10 @@ async function main() {
       tenantId: "seed-tenant-demo",
       googleAccountId: "demo-google-id",
       emailAddress: "demo@kotori.local",
-      scopes: ["https://www.googleapis.com/auth/gmail.modify"],
+      scopes: [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.compose",
+      ],
       encryptedCredentials: encryptCredentials(
         {
           accessToken: "development-only-token",

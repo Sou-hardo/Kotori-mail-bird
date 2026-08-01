@@ -14,7 +14,8 @@ describe("reply MIME", () => {
       "Thanks!",
     );
     const decoded = Buffer.from(raw, "base64url").toString();
-    expect(decoded).toContain("To: sender@example.com\r\nSubject: Re: Hello");
+    expect(decoded).toContain("From: sender@example.com\r\n");
+    expect(decoded).toContain("To: me@example.com\r\nSubject: Re: Hello");
     expect(decoded).toContain("In-Reply-To: <original@example.com>");
     expect(decoded).toContain(
       "References: <older@example.com> <original@example.com>",

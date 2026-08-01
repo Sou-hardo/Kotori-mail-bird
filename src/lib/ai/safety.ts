@@ -50,11 +50,27 @@ export interface SafetyInput {
   }>;
 }
 
-export function detectReviewFlags(input: SafetyInput): ReviewFlag[] {
+export interface OutgoingSafetyInput {
+  body?: string | null;
+  intent?: string | null;
+  identity?: string | null;
+  closing?: string | null;
+  recipients?: string[];
+  attachmentCount?: number;
+}
+
+export function detectReviewFlags(
+  input: SafetyInput,
+  outgoing: OutgoingSafetyInput = {},
+): ReviewFlag[] {
   const text = sanitizeAiText(
     [
       input.subject,
       ...input.messages.flatMap((m) => [m.bodyText, m.snippet]),
+      outgoing.intent,
+      outgoing.identity,
+      outgoing.closing,
+      outgoing.body,
     ].join("\n"),
     200_000,
   );
@@ -62,14 +78,14 @@ export function detectReviewFlags(input: SafetyInput): ReviewFlag[] {
     .filter(([, expression]) => expression.test(text))
     .map(([flag]) => flag);
   if (
-    /\b(?:attach(?:ed|ment)?|enclos(?:ed|ure))\b/i.test(text) &&
-    !input.messages.some((m) => m.attachments.length)
+    /\b(?:attach(?:ed|ment)?|enclos(?:ed|ure))\b/i.test(
+      [outgoing.intent, outgoing.body].filter(Boolean).join("\n"),
+    ) &&
+    (outgoing.attachmentCount ?? 0) === 0
   )
     flags.push("MISSING_ATTACHMENT");
   const recipients = new Set(
-    input.messages
-      .flatMap((m) => [...m.toAddresses, ...m.ccAddresses])
-      .map((v) => v.toLowerCase()),
+    (outgoing.recipients ?? []).map((v) => v.toLowerCase()),
   );
   if (recipients.size > 1) flags.push("MULTIPLE_RECIPIENTS");
   return [...new Set(flags)];

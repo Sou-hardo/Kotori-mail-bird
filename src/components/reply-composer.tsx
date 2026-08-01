@@ -3,19 +3,26 @@ import { useState } from "react";
 
 type Option = { id: string; body: string; rank: number };
 const tones = [
-  "Warm",
   "Professional",
-  "Concise",
+  "Warm professional",
   "Friendly",
   "Direct",
-  "Empathetic",
+  "Diplomatic",
+  "Academic",
 ];
 export function ReplyComposer({
   threadId,
   initial,
+  identities,
 }: {
   threadId: string;
   initial?: { flags: string[]; options: Option[] };
+  identities: Array<{
+    id: string;
+    label: string;
+    closing: string;
+    isDefault: boolean;
+  }>;
 }) {
   const [options, setOptions] = useState(initial?.options ?? []);
   const [flags, setFlags] = useState(initial?.flags ?? []);
@@ -31,20 +38,25 @@ export function ReplyComposer({
       body: JSON.stringify({
         threadId,
         intent: form.get("intent"),
-        tone: String(form.get("tone")).toLowerCase(),
+        tone: form.get("tone"),
         length: form.get("length"),
-        identity: form.get("identity"),
-        closing: form.get("closing"),
+        identityId: form.get("identityId"),
         acknowledgements: acks,
       }),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (res.status === 409) {
       setFlags(data.flags);
       setStatus("Please review the safety notes first.");
-    } else
+    } else if (res.ok)
       setStatus(
         `Generation queued (${data.jobId}). Refresh shortly to review exactly three options.`,
+      );
+    else
+      setStatus(
+        data.error
+          ? `Could not generate: ${data.error}`
+          : "Could not generate replies. Please try again.",
       );
     setBusy(false);
   }
@@ -65,8 +77,12 @@ export function ReplyComposer({
             : { action, reason: "Not the direction I want" },
       ),
     });
-    const data = await res.json();
-    if (res.ok)
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      if (action === "edit") {
+        setFlags(data.requiredReviewFlags ?? []);
+        setAcks([]);
+      }
       setStatus(
         action === "approve"
           ? "Approved. Your Gmail draft is ready to create—nothing has been sent."
@@ -74,9 +90,13 @@ export function ReplyComposer({
             ? "Option rejected. Regenerate when ready."
             : "Edits saved.",
       );
-    else {
+    } else {
       setFlags(data.flags ?? []);
-      setStatus("Review acknowledgement required.");
+      setStatus(
+        data.error
+          ? `Could not update: ${data.error}`
+          : "Review acknowledgement required.",
+      );
     }
     setBusy(false);
   }
@@ -117,19 +137,16 @@ export function ReplyComposer({
           </label>
           <label>
             Send as
-            <select name="identity">
-              <option>Primary identity</option>
-              <option>Work identity</option>
-              <option>Personal identity</option>
-            </select>
-          </label>
-          <label>
-            Closing
-            <select name="closing">
-              <option>Best,</option>
-              <option>Thanks,</option>
-              <option>Warmly,</option>
-              <option>No closing</option>
+            <select
+              name="identityId"
+              required
+              defaultValue={identities.find((x) => x.isDefault)?.id}
+            >
+              {identities.map((identity) => (
+                <option value={identity.id} key={identity.id}>
+                  {identity.label}
+                </option>
+              ))}
             </select>
           </label>
         </div>

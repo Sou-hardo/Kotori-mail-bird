@@ -50,7 +50,11 @@ export function analysisPrompt(thread: PromptThread) {
 export function replyPrompt(
   thread: PromptThread,
   analysis: ThreadAnalysisResult,
-  request: ReplyRequest,
+  request: ReplyRequest & {
+    identity: string;
+    closing: string;
+    signature: string;
+  },
 ) {
   const preferences = {
     intent: sanitizeAiText(request.intent, 200),
@@ -58,6 +62,7 @@ export function replyPrompt(
     length: request.length,
     identity: sanitizeAiText(request.identity, 200),
     closing: sanitizeAiText(request.closing, 200),
+    signature: sanitizeAiText(request.signature, 2_000),
   };
   return {
     system: `${SYSTEM_GUARD}\nWrite exactly three meaningfully different reply drafts. Every draft must honor the selected intent, tone, length, sender identity, and closing. Never promise, agree to legal/financial terms, disclose sensitive data, or claim an attachment unless explicitly requested by the preferences. Required keys: schemaVersion and drafts; each draft has label and body.`,

@@ -3,7 +3,7 @@ import { extname, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GMAIL_SCOPES } from "@/lib/gmail/oauth";
 
-const sourceRoot = new URL("../../", import.meta.url);
+const sourceRoot = new URL("../../../", import.meta.url);
 const forbidden = [
   /users\s*\.\s*messages\s*\.\s*send\s*\(/i,
   /messages\s*\.\s*send\s*\(/i,
@@ -21,9 +21,24 @@ async function sources(directory: URL): Promise<string[]> {
         `${entry.name}${entry.isDirectory() ? "/" : ""}`,
         directory,
       );
-      if (entry.isDirectory()) return sources(path);
-      return [".ts", ".tsx"].includes(extname(entry.name)) &&
-        !entry.name.endsWith(".test.ts")
+      if (entry.isDirectory())
+        return ["node_modules", ".git", ".next", "src/generated"].some(
+          (ignored) => path.pathname.includes(`/${ignored}/`),
+        )
+          ? []
+          : sources(path);
+      return [
+        ".ts",
+        ".tsx",
+        ".js",
+        ".mjs",
+        ".json",
+        ".yml",
+        ".yaml",
+        ".prisma",
+      ].includes(extname(entry.name)) &&
+        !entry.name.includes(".test.") &&
+        !path.pathname.endsWith("src/lib/security/no-send.test.ts")
         ? [path.pathname]
         : [];
     }),

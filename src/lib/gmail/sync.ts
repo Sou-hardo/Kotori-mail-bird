@@ -3,6 +3,7 @@ import type { gmail_v1 } from "googleapis";
 import { db } from "@/lib/db";
 import { getGmailService, isGmailHistoryExpired } from "@/lib/gmail/service";
 import { normalizeThread } from "@/lib/gmail/normalize";
+import { enqueueAnalysis } from "@/lib/jobs/queues";
 
 export type SyncResult = {
   mode: "initial" | "incremental" | "bounded-resync";
@@ -15,7 +16,7 @@ async function saveThread(
   raw: gmail_v1.Schema$Thread,
 ) {
   const thread = normalizeThread(raw);
-  await db.$transaction(async (tx) => {
+  const savedId = await db.$transaction(async (tx) => {
     const saved = await tx.emailThread.upsert({
       where: {
         gmailConnectionId_gmailThreadId: {
@@ -97,8 +98,28 @@ async function saveThread(
             contentId: attachment.contentId,
           },
         });
+      await tx.attachment.deleteMany({
+        where: {
+          messageId: stored.id,
+          gmailAttachmentId: {
+            notIn: message.attachments.map((item) => item.id),
+          },
+        },
+      });
     }
+    await tx.emailMessage.deleteMany({
+      where: {
+        threadId: saved.id,
+        gmailMessageId: { notIn: thread.messages.map((item) => item.id) },
+      },
+    });
+    return saved.id;
   });
+  await enqueueAnalysis(
+    connection.tenantId,
+    savedId,
+    raw.historyId ?? String(thread.latestMessageAt.getTime()),
+  );
   return raw.historyId ?? undefined;
 }
 
@@ -171,45 +192,77 @@ export async function syncConnection(
     else {
       const gmail = await getGmailService(connection.id);
       try {
-        const threadIds = new Set<string>();
-        let pageToken: string | undefined;
+        let processed = 0;
+        let pageToken = connection.syncState.pageToken ?? undefined;
         let historyId = connection.syncState.historyId;
         do {
           const page = await gmail.users.history.list({
             userId: "me",
             startHistoryId: connection.syncState.historyId,
-            historyTypes: ["messageAdded", "labelAdded", "labelRemoved"],
+            historyTypes: [
+              "messageAdded",
+              "messageDeleted",
+              "labelAdded",
+              "labelRemoved",
+            ],
             pageToken,
             maxResults: 100,
           });
+          const threadIds = new Set<string>();
           for (const h of page.data.history ?? [])
             for (const m of [
               ...(h.messagesAdded ?? []),
+              ...(h.messagesDeleted ?? []),
               ...(h.labelsAdded ?? []),
               ...(h.labelsRemoved ?? []),
             ])
               if (m.message?.threadId) threadIds.add(m.message.threadId);
-          historyId = page.data.historyId ?? historyId;
-          pageToken = page.data.nextPageToken ?? undefined;
-        } while (pageToken && threadIds.size <= 200);
-        for (const id of [...threadIds].slice(0, 200))
-          await saveThread(
-            connection,
-            (
-              await gmail.users.threads.get({
-                userId: "me",
-                id,
-                format: "full",
-              })
-            ).data,
-          );
+          for (const id of threadIds) {
+            try {
+              await saveThread(
+                connection,
+                (
+                  await gmail.users.threads.get({
+                    userId: "me",
+                    id,
+                    format: "full",
+                  })
+                ).data,
+              );
+            } catch (error) {
+              const status =
+                (error as { code?: number; response?: { status?: number } })
+                  .code ??
+                (error as { response?: { status?: number } }).response?.status;
+              if (status !== 404) throw error;
+              await db.emailThread.deleteMany({
+                where: { gmailConnectionId: connection.id, gmailThreadId: id },
+              });
+            }
+          }
+          processed += threadIds.size;
+          const nextPageToken = page.data.nextPageToken ?? undefined;
+          if (nextPageToken) {
+            await db.syncState.update({
+              where: { gmailConnectionId: connection.id },
+              data: { pageToken: nextPageToken },
+            });
+          } else {
+            historyId = page.data.historyId ?? historyId;
+            await db.syncState.update({
+              where: { gmailConnectionId: connection.id },
+              data: { historyId, pageToken: null },
+            });
+          }
+          pageToken = nextPageToken;
+        } while (pageToken);
         await db.syncState.update({
           where: { gmailConnectionId: connection.id },
-          data: { historyId },
+          data: { historyId, pageToken: null },
         });
         result = {
           mode: "incremental",
-          threads: Math.min(threadIds.size, 200),
+          threads: processed,
           historyId,
         };
       } catch (error) {

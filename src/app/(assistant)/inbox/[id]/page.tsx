@@ -9,7 +9,7 @@ export default async function ThreadPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const { tenantId } = await requireCurrentTenant();
+  const { tenantId, userId } = await requireCurrentTenant();
   const { id } = await params;
   const thread = await db.emailThread.findFirst({
     where: { id, tenantId },
@@ -25,6 +25,11 @@ export default async function ThreadPage({
     },
   });
   if (!thread) notFound();
+  const identities = await db.identityProfile.findMany({
+    where: { userId },
+    select: { id: true, label: true, closing: true, isDefault: true },
+    orderBy: [{ isDefault: "desc" }, { label: "asc" }],
+  });
   return (
     <div className="page-wrap detail">
       <Link className="back" href="/inbox">
@@ -76,6 +81,7 @@ export default async function ThreadPage({
       </section>
       <ReplyComposer
         threadId={thread.id}
+        identities={identities}
         initial={
           thread.replyGenerations[0]
             ? {
