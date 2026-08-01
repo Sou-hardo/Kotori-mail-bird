@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1.7
+FROM node:20.19-alpine AS base
+ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
+RUN corepack enable
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml ./
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+
+FROM base AS runner
+ENV NODE_ENV=production
+RUN addgroup --system --gid 1001 kotori && adduser --system --uid 1001 --ingroup kotori kotori
+COPY --from=deps --chown=kotori:kotori /app/node_modules ./node_modules
+COPY --chown=kotori:kotori package.json prisma.config.ts tsconfig.json ./
+COPY --chown=kotori:kotori prisma ./prisma
+COPY --chown=kotori:kotori src ./src
+RUN pnpm db:generate
+USER kotori
+CMD ["pnpm", "worker"]

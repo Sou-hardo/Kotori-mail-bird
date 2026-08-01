@@ -1,0 +1,168 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { createHash } from "node:crypto";
+import { REVIEW_FLAGS, detectReviewFlags } from "@/lib/ai/safety";
+import { sanitizeAiText } from "@/lib/ai/sanitize";
+import { requireCurrentTenant } from "@/lib/auth/current-tenant";
+import { db } from "@/lib/db";
+import { latestInbound, replyAllRecipients } from "@/lib/gmail/recipients";
+
+const hash = (value: string) =>
+  createHash("sha256").update(value, "utf8").digest("hex");
+
+const actionSchema = z.discriminatedUnion("action", [
+  z
+    .object({ action: z.literal("edit"), body: z.string().min(1).max(20_000) })
+    .strict(),
+  z
+    .object({
+      action: z.literal("reject"),
+      reason: z.string().max(1_000).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("approve"),
+      acknowledgements: z.array(z.enum(REVIEW_FLAGS)).default([]),
+    })
+    .strict(),
+]);
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const { id } = await context.params;
+  const input = actionSchema.parse(await request.json());
+  const option = await db.replyOption.findUniqueOrThrow({
+    where: { id },
+    include: {
+      thread: {
+        include: {
+          gmailConnection: true,
+          messages: {
+            orderBy: { sentAt: "asc" },
+            include: { attachments: true },
+          },
+        },
+      },
+      generation: true,
+    },
+  });
+  const principal = await requireCurrentTenant(option.thread.tenantId);
+  const inbound = latestInbound(
+    option.thread.messages,
+    option.thread.gmailConnection.emailAddress,
+  );
+  const recipients = inbound
+    ? replyAllRecipients(inbound, option.thread.gmailConnection.emailAddress)
+    : null;
+  if (!inbound || !recipients?.to.length)
+    return NextResponse.json({ error: "no_reply_recipient" }, { status: 409 });
+  const currentFlags = detectReviewFlags(option.thread, {
+    body: option.body,
+    intent: option.intent,
+    identity: option.generation?.identity,
+    closing: option.generation?.closing,
+    recipients: [...recipients.to, ...recipients.cc],
+  });
+  if (input.action === "approve") {
+    const missing = currentFlags.filter(
+      (flag) =>
+        !input.acknowledgements.includes(flag as (typeof REVIEW_FLAGS)[number]),
+    );
+    if (missing.length)
+      return NextResponse.json(
+        { error: "review_acknowledgement_required", flags: missing },
+        { status: 409 },
+      );
+  }
+  const result = await db.$transaction(async (tx) => {
+    let targetBody = option.body;
+    let targetVersion = option.version;
+    if (input.action === "edit")
+      ({ body: targetBody, version: targetVersion } =
+        await tx.replyOption.update({
+          where: { id },
+          data: { body: sanitizeAiText(input.body), version: { increment: 1 } },
+        }));
+    if (input.action === "approve") {
+      await tx.replyGeneration.update({
+        where: { id: option.generationId! },
+        data: {
+          acknowledgedFlags: input.acknowledgements,
+          requiredReviewFlags: currentFlags,
+        },
+      });
+      await tx.gmailDraft.create({
+        data: {
+          threadId: option.threadId,
+          replyOptionId: option.id,
+          body: option.body,
+          toAddresses: recipients.to,
+          ccAddresses: recipients.cc,
+          sourceMessageId: inbound.id,
+          status: "APPROVED",
+        },
+      });
+    }
+    await tx.auditEvent.create({
+      data: {
+        tenantId: option.thread.tenantId,
+        actorId: principal.userId,
+        action:
+          input.action === "edit"
+            ? "REPLY_EDITED"
+            : input.action === "reject"
+              ? "REPLY_REJECTED"
+              : "REPLY_APPROVED",
+        targetType: "ReplyOption",
+        targetId: id,
+        metadata:
+          input.action === "reject"
+            ? {
+                reason: sanitizeAiText(input.reason, 1_000),
+                version: option.version,
+              }
+            : input.action === "approve"
+              ? {
+                  acknowledgements: input.acknowledgements,
+                  version: option.version,
+                  bodyHash: hash(option.body),
+                  recipients: [...recipients.to, ...recipients.cc],
+                  recipientsHash: hash(JSON.stringify(recipients)),
+                  requiredReviewFlags: currentFlags,
+                }
+              : {
+                  version: targetVersion,
+                  contentChanged: targetBody !== option.body,
+                  beforeBodyHash: hash(option.body),
+                  afterBodyHash: hash(targetBody),
+                  requiredReviewFlags: detectReviewFlags(option.thread, {
+                    body: targetBody,
+                    intent: option.intent,
+                    identity: option.generation?.identity,
+                    closing: option.generation?.closing,
+                    recipients: [...recipients.to, ...recipients.cc],
+                  }),
+                },
+      },
+    });
+    return { id: option.id, body: targetBody, version: targetVersion };
+  });
+  return NextResponse.json({
+    id: result.id,
+    action: input.action,
+    version: result.version,
+    requiredReviewFlags:
+      input.action === "edit"
+        ? detectReviewFlags(option.thread, {
+            body: result.body,
+            intent: option.intent,
+            identity: option.generation?.identity,
+            closing: option.generation?.closing,
+            recipients: [...recipients.to, ...recipients.cc],
+          })
+        : currentFlags,
+  });
+}
