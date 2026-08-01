@@ -5,6 +5,7 @@ import { getServerEnv } from "@/lib/env";
 import { createGmailDraft } from "@/lib/gmail/drafts";
 import { syncConnection } from "@/lib/gmail/sync";
 import { enqueueSync, QUEUES, type QueueName } from "@/lib/jobs/queues";
+import { analyzeThread, generateReplies } from "@/lib/ai/service";
 
 const connection = {
   url: getServerEnv().REDIS_URL,
@@ -93,7 +94,24 @@ export function startWorkers() {
   create(QUEUES.drafts, (job) =>
     execute(job, () => createGmailDraft(job.data.draftId as string)),
   );
-  create(QUEUES.analysis, (job) => execute(job, placeholder("analysis")));
+  create(QUEUES.analysis, (job) =>
+    execute(job, () => {
+      if (job.name === "ai.thread.analyze")
+        return analyzeThread(job.data.threadId as string);
+      throw new Error(`Unknown analysis job: ${job.name}`);
+    }),
+  );
+  create(QUEUES.replies, (job) =>
+    execute(job, () => {
+      if (job.name !== "ai.reply.generate")
+        throw new Error(`Unknown reply generation job: ${job.name}`);
+      const request = { ...job.data };
+      const actorId = request.actorId as string;
+      delete request.actorId;
+      delete request.operationalJobId;
+      return generateReplies(request, actorId);
+    }),
+  );
   create(QUEUES.reminders, (job) => execute(job, placeholder("reminders")));
   create(QUEUES.push, (job) => execute(job, placeholder("push")));
   create(QUEUES.retention, (job) =>

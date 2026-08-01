@@ -1,4 +1,5 @@
 import { Queue } from "bullmq";
+import { randomUUID } from "node:crypto";
 import type { GmailConnection } from "@/generated/prisma/client";
 import type { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
@@ -8,6 +9,7 @@ import { operationalDedupeId } from "@/lib/jobs/dedupe";
 export const QUEUES = {
   sync: "gmail-sync",
   analysis: "analysis",
+  replies: "reply-generation",
   drafts: "drafts",
   reminders: "reminders",
   push: "push",
@@ -93,6 +95,31 @@ export async function enqueueSync(
     },
   );
   return record;
+}
+
+export function enqueueAnalysis(tenantId: string, threadId: string) {
+  return enqueueOperationalJob(
+    QUEUES.analysis,
+    tenantId,
+    "ai.thread.analyze",
+    { threadId },
+    threadId,
+  );
+}
+
+export function enqueueReplyGeneration(
+  tenantId: string,
+  input: Record<string, unknown>,
+  actorId: string,
+) {
+  const threadId = String(input.threadId);
+  return enqueueOperationalJob(
+    QUEUES.replies,
+    tenantId,
+    "ai.reply.generate",
+    { ...input, actorId },
+    `${threadId}:${randomUUID()}`,
+  );
 }
 
 export async function closeQueues() {

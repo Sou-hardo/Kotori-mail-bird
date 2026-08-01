@@ -59,6 +59,9 @@ enum AuditAction {
   SYNC_COMPLETED
   CLASSIFICATION_CREATED
   REPLY_GENERATED
+  REPLY_EDITED
+  REPLY_REJECTED
+  REPLY_APPROVED
   GMAIL_DRAFT_CREATED
 }
 
@@ -146,12 +149,12 @@ model GmailConnection {
   encryptedCredentials String           @db.Text
   scopes               String[]
   status               ConnectionStatus @default(ACTIVE)
-  lastError             String?          @db.Text
-  createdAt             DateTime         @default(now())
-  updatedAt             DateTime         @updatedAt
-  tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  syncState             SyncState?
-  threads               EmailThread[]
+  lastError            String?          @db.Text
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+  tenant               Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  syncState            SyncState?
+  threads              EmailThread[]
 
   @@unique([tenantId, googleAccountId])
   @@unique([tenantId, emailAddress])
@@ -159,58 +162,60 @@ model GmailConnection {
 }
 
 model SyncState {
-  id                 String          @id @default(cuid())
+  id                String          @id @default(cuid())
   gmailConnectionId String          @unique
-  historyId          String?
-  pageToken          String?
-  status             SyncStatus      @default(IDLE)
-  lastStartedAt      DateTime?
-  lastCompletedAt    DateTime?
-  lastError          String?         @db.Text
-  updatedAt          DateTime        @updatedAt
-  gmailConnection    GmailConnection @relation(fields: [gmailConnectionId], references: [id], onDelete: Cascade)
+  historyId         String?
+  pageToken         String?
+  status            SyncStatus      @default(IDLE)
+  lastStartedAt     DateTime?
+  lastCompletedAt   DateTime?
+  lastError         String?         @db.Text
+  updatedAt         DateTime        @updatedAt
+  gmailConnection   GmailConnection @relation(fields: [gmailConnectionId], references: [id], onDelete: Cascade)
 }
 
 model EmailThread {
-  id                String             @id @default(cuid())
+  id                String            @id @default(cuid())
   tenantId          String
   gmailConnectionId String
   gmailThreadId     String
   subject           String?
-  snippet           String?            @db.Text
+  snippet           String?           @db.Text
   latestMessageAt   DateTime
-  isUnread          Boolean            @default(false)
+  isUnread          Boolean           @default(false)
   labelIds          String[]
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  gmailConnection   GmailConnection     @relation(fields: [gmailConnectionId], references: [id], onDelete: Cascade)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  gmailConnection   GmailConnection   @relation(fields: [gmailConnectionId], references: [id], onDelete: Cascade)
   messages          EmailMessage[]
   classification    Classification?
   summary           ThreadSummary?
   replyOptions      ReplyOption[]
   gmailDrafts       GmailDraft[]
+  analyses          ThreadAnalysis[]
+  replyGenerations  ReplyGeneration[]
 
   @@unique([gmailConnectionId, gmailThreadId])
   @@index([tenantId, latestMessageAt])
 }
 
 model EmailMessage {
-  id              String       @id @default(cuid())
-  threadId        String
-  gmailMessageId  String
+  id                String       @id @default(cuid())
+  threadId          String
+  gmailMessageId    String
   internetMessageId String?
-  fromAddress     String
-  toAddresses     String[]
-  ccAddresses     String[]
-  sentAt          DateTime
-  snippet         String?      @db.Text
-  bodyText        String?      @db.Text
-  bodyHtml        String?      @db.Text
-  headers         Json?
-  createdAt       DateTime     @default(now())
-  thread          EmailThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
-  attachments     Attachment[]
+  fromAddress       String
+  toAddresses       String[]
+  ccAddresses       String[]
+  sentAt            DateTime
+  snippet           String?      @db.Text
+  bodyText          String?      @db.Text
+  bodyHtml          String?      @db.Text
+  headers           Json?
+  createdAt         DateTime     @default(now())
+  thread            EmailThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  attachments       Attachment[]
 
   @@unique([threadId, gmailMessageId])
   @@index([threadId, sentAt])
@@ -230,15 +235,15 @@ model Attachment {
 }
 
 model Classification {
-  id          String         @id @default(cuid())
-  threadId    String         @unique
-  category    ThreadCategory
-  confidence  Float
-  rationale   String?        @db.Text
-  model       String
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
-  thread      EmailThread    @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  id         String         @id @default(cuid())
+  threadId   String         @unique
+  category   ThreadCategory
+  confidence Float
+  rationale  String?        @db.Text
+  model      String
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  thread     EmailThread    @relation(fields: [threadId], references: [id], onDelete: Cascade)
 }
 
 model ThreadSummary {
@@ -253,55 +258,93 @@ model ThreadSummary {
 }
 
 model ReplyOption {
-  id        String      @id @default(cuid())
-  threadId  String
-  tone      String
-  body      String      @db.Text
-  model     String
-  rank      Int
-  createdAt DateTime    @default(now())
-  thread    EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
-  gmailDraft GmailDraft?
+  id           String           @id @default(cuid())
+  threadId     String
+  tone         String
+  body         String           @db.Text
+  model        String
+  rank         Int
+  createdAt    DateTime         @default(now())
+  thread       EmailThread      @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  gmailDraft   GmailDraft?
+  generationId String?
+  generation   ReplyGeneration? @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  intent       String?
+  version      Int              @default(1)
 
-  @@unique([threadId, rank])
+  @@unique([generationId, rank])
+  @@index([generationId])
+}
+
+model ThreadAnalysis {
+  id            String      @id @default(cuid())
+  threadId      String
+  schemaVersion String
+  model         String
+  analysis      Json
+  safetyFlags   Json
+  createdAt     DateTime    @default(now())
+  thread        EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+}
+
+model ReplyGeneration {
+  id                  String        @id @default(cuid())
+  threadId            String
+  schemaVersion       String
+  model               String
+  intent              String
+  tone                String
+  length              String
+  identity            String
+  closing             String
+  requiredReviewFlags String[]
+  acknowledgedFlags   String[]
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  thread              EmailThread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  options             ReplyOption[]
+
+  @@index([threadId, createdAt])
 }
 
 model GmailDraft {
-  id             String      @id @default(cuid())
-  threadId       String
-  replyOptionId  String?     @unique
-  gmailDraftId   String?     @unique
-  status         DraftStatus @default(SUGGESTED)
-  subject        String?
-  body           String      @db.Text
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
-  thread         EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
-  replyOption    ReplyOption? @relation(fields: [replyOptionId], references: [id], onDelete: SetNull)
+  id            String       @id @default(cuid())
+  threadId      String
+  replyOptionId String?      @unique
+  gmailDraftId  String?      @unique
+  status        DraftStatus  @default(SUGGESTED)
+  subject       String?
+  body          String       @db.Text
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  thread        EmailThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  replyOption   ReplyOption? @relation(fields: [replyOptionId], references: [id], onDelete: SetNull)
 
   @@index([threadId, status])
 }
 
 model ProcessingJob {
-  id          String           @id @default(cuid())
-  tenantId    String
-  kind        String
-  dedupeKey   String?
-  status      ProcessingStatus @default(PENDING)
-  input       Json?
-  output      Json?
-  error       String?          @db.Text
-  attempts    Int              @default(0)
-  maxAttempts Int              @default(5)
-  queueJobId  String?
-  leaseOwner  String?
+  id             String           @id @default(cuid())
+  tenantId       String
+  kind           String
+  dedupeKey      String?
+  status         ProcessingStatus @default(PENDING)
+  input          Json?
+  output         Json?
+  error          String?          @db.Text
+  attempts       Int              @default(0)
+  maxAttempts    Int              @default(5)
+  queueJobId     String?
+  leaseOwner     String?
   leaseExpiresAt DateTime?
-  scheduledAt DateTime         @default(now())
-  startedAt   DateTime?
-  completedAt DateTime?
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
-  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scheduledAt    DateTime         @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, kind, dedupeKey])
   @@index([status, scheduledAt])
@@ -309,16 +352,16 @@ model ProcessingJob {
 }
 
 model AuditEvent {
-  id        String      @id @default(cuid())
-  tenantId  String
-  actorId   String?
-  action    AuditAction
+  id         String      @id @default(cuid())
+  tenantId   String
+  actorId    String?
+  action     AuditAction
   targetType String?
-  targetId  String?
-  metadata  Json?
-  createdAt DateTime    @default(now())
-  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  actor     User?       @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  targetId   String?
+  metadata   Json?
+  createdAt  DateTime    @default(now())
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actor      User?       @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
 }

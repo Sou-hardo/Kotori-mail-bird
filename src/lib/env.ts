@@ -15,6 +15,9 @@ const serverEnvSchema = z.object({
   GMAIL_OAUTH_CLIENT_ID: z.string().min(1),
   GMAIL_OAUTH_CLIENT_SECRET: z.string().min(1),
   GMAIL_OAUTH_REDIRECT_URI: z.string().url(),
+  DEEPSEEK_API_KEY: z.string().min(1),
+  DEEPSEEK_BASE_URL: z.string().url().default("https://api.deepseek.com"),
+  DEEPSEEK_MODEL: z.string().min(1).default("deepseek-chat"),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

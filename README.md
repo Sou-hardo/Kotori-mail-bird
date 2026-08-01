@@ -47,3 +47,20 @@ allowlist-sanitized and only required headers are retained.
 
 There is intentionally no email-send capability: the product only creates drafts for
 review in Gmail.
+
+## DeepSeek analysis and reply review
+
+Set `DEEPSEEK_API_KEY`; `DEEPSEEK_BASE_URL` and `DEEPSEEK_MODEL` default to the
+DeepSeek chat API. `POST /api/ai/analyze` queues versioned structured thread analysis,
+and `GET /api/ai/analyze?threadId=...` returns only schema-validated results.
+`POST /api/ai/replies` queues reply generation with an intent, tone, length, identity,
+closing, and explicit acknowledgements for every returned review flag. The model is
+constrained to JSON mode and exactly three distinct drafts; malformed, empty, truncated,
+or schema-invalid output is rejected before storage or display.
+
+Email content is sanitized, bounded, isolated as untrusted prompt data, and cannot request
+tools or override instructions. Deterministic gates cover financial commitments,
+legal/contracts, recruitment, complaints, sensitive information, deadlines/promises,
+missing mentioned attachments, and multiple recipients. Editing, rejecting, and approving
+a reply uses `PATCH /api/ai/replies/:id` and is recorded in the audit history. Approval
+creates only a local reviewable draft record; it does not send email.

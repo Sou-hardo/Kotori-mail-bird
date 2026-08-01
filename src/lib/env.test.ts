@@ -13,6 +13,9 @@ const valid = {
   GMAIL_OAUTH_CLIENT_SECRET: "gmail-client-secret",
   GMAIL_OAUTH_REDIRECT_URI: "http://localhost:3000/api/gmail/callback",
   CREDENTIAL_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
+  DEEPSEEK_API_KEY: "deepseek-test-key",
+  DEEPSEEK_BASE_URL: "https://api.deepseek.com",
+  DEEPSEEK_MODEL: "deepseek-chat",
 };
 
 describe("server environment", () => {
