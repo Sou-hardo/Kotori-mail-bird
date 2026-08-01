@@ -1,72 +1,117 @@
 # Kotori Mail Bird
 
-Kotori Mail Bird is a mobile-first Gmail assistant that classifies inbox threads,
-summarizes requested actions, generates reviewable reply options with DeepSeek,
-and creates Gmail drafts. It never sends email automatically.
+Kotori Mail Bird is a self-hosted, mobile-first Gmail assistant. It syncs inbox threads, classifies and summarizes them, generates three editable DeepSeek reply options, and—only after explicit approval—can create a Gmail draft. It has no email-send endpoint, queue, scope, or Gmail send method.
 
-Development and deployment documentation will be expanded on the
-`feature/gmail-assistant-mvp` branch.
+## Safety and privacy model
 
-## Assistant interface and PWA
+- Google access is limited to `gmail.readonly` and `gmail.compose`; `gmail.send`, `gmail.modify`, and full-mail scopes are never requested.
+- AI output is schema-validated, sanitized, editable, and gated for financial, legal, hiring, complaint, sensitive-data, deadline, attachment, and multi-recipient risks.
+- Approval creates a local draft. A separate user action creates a draft in Gmail. Sending remains exclusively in Gmail under the user's control.
+- Credentials are encrypted at rest with a dedicated 32-byte key. OAuth state is signed, short-lived, and bound to the authenticated user and tenant with PKCE.
+- All mailbox queries are tenant-scoped after membership verification. Identity, reminder, notification, and push records are user-scoped.
+- Email threads older than 90 days are removed daily, cascading to messages, attachments, analyses, reply options, and drafts. Audit metadata never stores reply bodies; redacted audit events are removed after one year.
+- CI contains a structural guard that fails if Gmail send methods, endpoints, scopes, or send queue names appear in application source.
 
-The authenticated App Router interface has five primary destinations: Inbox, Drafts, Follow-ups, Notifications, and Settings. Reply generation produces exactly three editable options; approval creates a local approved draft, while **Create Gmail draft** is a separate explicit action. There is no Gmail send capability.
+## Local setup
 
-Identity profiles include label, display name, email, role/title, company, phone, website, pronouns, signature, closing, and default status. The app includes an installable manifest, icon, privacy-safe static offline fallback, service worker, and optional Web Push. Authenticated pages and API responses are network-only and are never persisted in the browser Cache API. Generate VAPID keys with `pnpm exec web-push generate-vapid-keys`, then configure `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, and the matching `NEXT_PUBLIC_VAPID_PUBLIC_KEY`. A reusable React Email notification is available at `src/components/emails/notification-email.tsx`.
+Requirements: Node.js 20.19+, pnpm 10.28+, Docker with Compose v2, and a Google Cloud project.
 
-## Local development
+```bash
+cp .env.example .env
+docker compose up -d
+pnpm install --frozen-lockfile
+pnpm db:migrate
+NODE_ENV=development pnpm db:seed   # optional local fixtures
+pnpm dev
+```
 
-Requirements: Node.js 20.19 or newer, pnpm 10, and Docker.
+Run `pnpm worker` in a second terminal. The seed refuses non-development execution and non-local database hosts. The local Compose file exposes PostgreSQL on 5432 and Redis on 6379; it is not the production stack.
 
-1. Copy `.env.example` to `.env` and replace the placeholder secrets.
-2. Start dependencies with `docker compose up -d`.
-3. Install packages with `pnpm install`.
-4. Apply the database migration with `pnpm db:migrate`.
-5. Optionally load local fixtures with `NODE_ENV=development pnpm db:seed`.
-6. Start the application with `pnpm dev`.
+Generate secrets with `openssl rand -base64 32`. `AUTH_SECRET` and `CREDENTIAL_ENCRYPTION_KEY` must be different; keep both out of source control. Changing the encryption key makes stored Gmail grants unreadable, so preserve it in an encrypted password manager and backup procedure.
 
-The seed command refuses to run outside development or against a non-local database host.
-Google sign-in and Gmail authorization are separate grants. Configure the Auth.js
-Google client with `/api/auth/callback/google`; configure the Gmail client with
-`/api/gmail/callback`. The Gmail grant requests only `gmail.readonly` and
-`gmail.compose`, uses PKCE and signed state, and requires offline consent so refresh
-tokens can be encrypted at rest. `APP_URL` must be the public application origin and
-`GMAIL_OAUTH_REDIRECT_URI` must exactly match the callback registered with Google.
+## Google OAuth and Gmail API
 
-## Gmail and background jobs
+In Google Cloud Console:
 
-- `GET /api/gmail/connect` begins an authenticated Gmail connection flow. An optional
-  `tenantId` query parameter selects one of the user's workspaces.
-- `GET /api/gmail/callback` verifies state/PKCE, persists encrypted credentials, and
-  enqueues the bounded initial sync.
-- `POST /api/gmail/disconnect` with `{ "connectionId": "..." }` revokes the grant.
-- `POST /api/gmail/sync` queues a manual sync; pass `full: true` for a bounded resync.
-  `GET /api/gmail/sync?connectionId=...` returns connection, sync, and recent job state.
-- `POST /api/gmail/drafts` with `{ "draftId": "..." }` creates a Gmail draft through
-  the background queue. Threading requires the original `Message-ID` and references.
+1. Create or select a project and enable the Gmail API.
+2. Configure the OAuth consent screen. For testing mode, add each test account; for external production use, complete Google's verification requirements for the requested sensitive scopes.
+3. Create a Web application OAuth client for Auth.js. Add `http://localhost:3000/api/auth/callback/google` locally and `https://mail.example.com/api/auth/callback/google` in production.
+4. Create a second Web application client for the mailbox grant (recommended separation). Add `http://localhost:3000/api/gmail/callback` locally and `https://mail.example.com/api/gmail/callback` in production.
+5. Put the sign-in client in `AUTH_GOOGLE_ID`/`AUTH_GOOGLE_SECRET`, and the mailbox client in `GMAIL_OAUTH_CLIENT_ID`/`GMAIL_OAUTH_CLIENT_SECRET`. Set `GMAIL_OAUTH_REDIRECT_URI` to the exact mailbox callback.
 
-Run the web process with `pnpm start` and the separate BullMQ process with
-`pnpm worker`. Redis-backed polling runs every five minutes. Jobs use stable dedupe
-keys, database leases, five exponential-backoff attempts, and `DEAD_LETTER` terminal
-state; inspect `ProcessingJob` and `SyncState` for operations. Initial and expired-history
-resyncs are deliberately capped at 14 days and 200 inbox threads. Message HTML is
-allowlist-sanitized and only required headers are retained.
+Google sign-in and Gmail authorization are separate grants. The Gmail flow requests offline consent for refresh tokens plus only `gmail.readonly` and `gmail.compose`. If a refresh token is not returned, revoke the app grant in the Google account and reconnect.
 
-There is intentionally no email-send capability: the product only creates drafts for
-review in Gmail.
+## DeepSeek and Web Push
 
-## DeepSeek analysis and reply review
+Set `DEEPSEEK_API_KEY`. `DEEPSEEK_BASE_URL` defaults to `https://api.deepseek.com` and `DEEPSEEK_MODEL` to `deepseek-chat`. Email content is bounded and marked as untrusted data in prompts; malformed or truncated model output is rejected.
 
-Set `DEEPSEEK_API_KEY`; `DEEPSEEK_BASE_URL` and `DEEPSEEK_MODEL` default to the
-DeepSeek chat API. `POST /api/ai/analyze` queues versioned structured thread analysis,
-and `GET /api/ai/analyze?threadId=...` returns only schema-validated results.
-`POST /api/ai/replies` queues reply generation with an intent, tone, length, identity,
-closing, and explicit acknowledgements for every returned review flag. The model is
-constrained to JSON mode and exactly three distinct drafts; malformed, empty, truncated,
-or schema-invalid output is rejected before storage or display.
+Push is optional. Generate VAPID keys with `pnpm exec web-push generate-vapid-keys`, set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and a `mailto:` `VAPID_SUBJECT`, and set `NEXT_PUBLIC_VAPID_PUBLIC_KEY` to the same public key for local builds. The production image receives the public key at build time from `VAPID_PUBLIC_KEY`.
 
-Email content is sanitized, bounded, isolated as untrusted prompt data, and cannot request
-tools or override instructions. Deterministic gates cover financial commitments,
-legal/contracts, recruitment, complaints, sensitive information, deadlines/promises,
-missing mentioned attachments, and multiple recipients. Editing, rejecting, and approving
-a reply uses `PATCH /api/ai/replies/:id` and is recorded in the audit history. Approval
-creates only a local reviewable draft record; it does not send email.
+## Database and worker operations
+
+- Development migration: `pnpm db:migrate`
+- Production migration: `pnpm exec prisma migrate deploy`
+- Schema validation/generation: `pnpm db:validate && pnpm db:generate`
+- Development seed: `NODE_ENV=development pnpm db:seed`
+- One-off privacy cleanup: `pnpm retention`
+
+The separate BullMQ worker handles bounded Gmail sync, analysis, reply generation, Gmail draft creation, reminders, push, and retention. Jobs use stable dedupe keys, leases, five exponential-backoff attempts, and terminal `DEAD_LETTER` state. Gmail polling runs every five minutes; retention runs daily at 03:17 UTC.
+
+## Testing and quality gates
+
+```bash
+pnpm format:check
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm test:no-send
+pnpm db:validate
+pnpm db:generate
+pnpm build
+```
+
+Tests do not contact Gmail or DeepSeek. Route-level health tests mock the database; Gmail tests use fake clients. GitHub Actions runs the same checks with representative non-secret environment values.
+
+## VPS production deployment
+
+Use a current Debian/Ubuntu VPS with Docker Engine and Compose v2. Point the domain's A/AAAA records to the VPS and allow inbound TCP 80/443 and UDP 443. Do not expose PostgreSQL or Redis publicly.
+
+```bash
+git clone <repository-url> kotori && cd kotori
+cp .env.production.example .env.production
+$EDITOR .env.production
+docker compose --env-file .env.production -f compose.production.yml build
+docker compose --env-file .env.production -f compose.production.yml up -d
+docker compose --env-file .env.production -f compose.production.yml ps
+curl -fsS https://mail.example.com/api/health
+```
+
+The one-shot `migrate` service must succeed before web and worker start. Caddy obtains and renews TLS certificates, proxies only to the internal web container, compresses responses, and adds HSTS, clickjacking, MIME-sniffing, referrer, permissions, and server-disclosure headers. Application containers run as unprivileged users with `no-new-privileges`; PostgreSQL, Redis AOF, and Caddy certificate/config state use named volumes.
+
+For upgrades, pull the desired commit, rerun `build`, then `up -d`. Review migrations and take a database backup first. Inspect with `docker compose --env-file .env.production -f compose.production.yml logs -f web worker migrate caddy`. The readiness endpoint returns 200 only when the process can query PostgreSQL; Caddy waits for that health check.
+
+## Backup and restore
+
+Back up PostgreSQL daily and before every upgrade. Store encrypted copies off-host; database dumps include mailbox content and encrypted OAuth credentials. Also back up `.env.production` separately in an encrypted secret store. Redis contains reconstructable job state and normally does not need disaster-recovery backup, while Caddy certificates can be reissued.
+
+```bash
+mkdir -p backups
+docker compose --env-file .env.production -f compose.production.yml exec -T postgres \
+  pg_dump -U kotori -d kotori --format=custom > "backups/kotori-$(date -u +%Y%m%dT%H%M%SZ).dump"
+```
+
+Test restores regularly. To restore, stop web/worker, recreate an empty database, restore, run migrations, and restart:
+
+```bash
+docker compose --env-file .env.production -f compose.production.yml stop web worker
+docker compose --env-file .env.production -f compose.production.yml exec -T postgres \
+  dropdb -U kotori --if-exists kotori
+docker compose --env-file .env.production -f compose.production.yml exec -T postgres \
+  createdb -U kotori kotori
+docker compose --env-file .env.production -f compose.production.yml exec -T postgres \
+  pg_restore -U kotori -d kotori --clean --if-exists < backups/kotori-YYYYMMDDTHHMMSSZ.dump
+docker compose --env-file .env.production -f compose.production.yml run --rm migrate
+docker compose --env-file .env.production -f compose.production.yml up -d
+```
+
+Retention applies to the live database, not historical backups. Enforce matching expiry in backup storage (90 days unless a stricter policy applies), restrict access, and record restore tests. Users should disconnect Gmail before account offboarding; revocation is attempted and local encrypted credentials are marked revoked.
