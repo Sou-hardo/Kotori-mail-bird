@@ -55,6 +55,7 @@ export async function deepSeekJson<T>(
     );
   }
   const choice = envelope.choices[0];
+  if (!choice) throw new AiResponseError("DeepSeek returned no choices");
   if (choice.finish_reason === "length")
     throw new AiResponseError("DeepSeek response was truncated");
   const content = choice.message.content?.trim();

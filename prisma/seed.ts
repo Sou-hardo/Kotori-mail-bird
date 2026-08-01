@@ -108,6 +108,47 @@ async function main() {
       },
     },
   });
+  await prisma.identityProfile.upsert({
+    where: { userId_label: { userId: "seed-user-demo", label: "Work" } },
+    update: {},
+    create: {
+      id: "seed-identity-work",
+      userId: "seed-user-demo",
+      label: "Work",
+      displayName: "Kotori Demo",
+      email: "demo@kotori.local",
+      role: "Product Lead",
+      company: "Kotori",
+      pronouns: "they/them",
+      signature: "Kotori Demo\nProduct Lead · Kotori",
+      closing: "Best,",
+      isDefault: true,
+    },
+  });
+  await prisma.followUpReminder.upsert({
+    where: { id: "seed-reminder-launch" },
+    update: {},
+    create: {
+      id: "seed-reminder-launch",
+      userId: "seed-user-demo",
+      threadId: "seed-thread-action",
+      title: "Check on launch checklist",
+      note: "Confirm legal sign-off",
+      dueAt: new Date("2026-08-03T09:00:00.000Z"),
+    },
+  });
+  await prisma.notification.upsert({
+    where: { id: "seed-notification-attention" },
+    update: {},
+    create: {
+      id: "seed-notification-attention",
+      userId: "seed-user-demo",
+      threadId: "seed-thread-action",
+      kind: "ATTENTION",
+      title: "Launch checklist needs a reply",
+      body: "Alex asked for your review by Friday.",
+    },
+  });
 }
 
 main().finally(() => prisma.$disconnect());

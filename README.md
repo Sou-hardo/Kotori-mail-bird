@@ -7,6 +7,12 @@ and creates Gmail drafts. It never sends email automatically.
 Development and deployment documentation will be expanded on the
 `feature/gmail-assistant-mvp` branch.
 
+## Assistant interface and PWA
+
+The authenticated App Router interface has five primary destinations: Inbox, Drafts, Follow-ups, Notifications, and Settings. Reply generation produces exactly three editable options; approval creates a local approved draft, while **Create Gmail draft** is a separate explicit action. There is no Gmail send capability.
+
+Identity profiles include label, display name, email, role/title, company, phone, website, pronouns, signature, closing, and default status. The app includes an installable manifest, icon, privacy-safe static offline fallback, service worker, and optional Web Push. Authenticated pages and API responses are network-only and are never persisted in the browser Cache API. Generate VAPID keys with `pnpm exec web-push generate-vapid-keys`, then configure `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, and the matching `NEXT_PUBLIC_VAPID_PUBLIC_KEY`. A reusable React Email notification is available at `src/components/emails/notification-email.tsx`.
+
 ## Local development
 
 Requirements: Node.js 20.19 or newer, pnpm 10, and Docker.

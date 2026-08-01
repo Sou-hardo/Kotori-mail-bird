@@ -46,12 +46,14 @@ export async function PATCH(
       );
   }
   const result = await db.$transaction(async (tx) => {
-    let target = option;
+    let targetBody = option.body;
+    let targetVersion = option.version;
     if (input.action === "edit")
-      target = await tx.replyOption.update({
-        where: { id },
-        data: { body: sanitizeAiText(input.body), version: { increment: 1 } },
-      });
+      ({ body: targetBody, version: targetVersion } =
+        await tx.replyOption.update({
+          where: { id },
+          data: { body: sanitizeAiText(input.body), version: { increment: 1 } },
+        }));
     if (input.action === "approve") {
       await tx.replyGeneration.update({
         where: { id: option.generationId! },
@@ -93,12 +95,12 @@ export async function PATCH(
                 }
               : {
                   previousBody: option.body,
-                  body: target.body,
-                  version: target.version,
+                  body: targetBody,
+                  version: targetVersion,
                 },
       },
     });
-    return target;
+    return { id: option.id, body: targetBody, version: targetVersion };
   });
   return NextResponse.json({
     id: result.id,

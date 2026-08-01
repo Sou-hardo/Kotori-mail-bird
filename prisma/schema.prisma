@@ -77,6 +77,10 @@ model User {
   sessions      Session[]
   memberships   Membership[]
   auditEvents   AuditEvent[] @relation("AuditActor")
+  identities    IdentityProfile[]
+  reminders     FollowUpReminder[]
+  notifications Notification[]
+  pushSubscriptions PushSubscription[]
 }
 
 model Account {
@@ -195,9 +199,91 @@ model EmailThread {
   gmailDrafts       GmailDraft[]
   analyses          ThreadAnalysis[]
   replyGenerations  ReplyGeneration[]
+  reminders         FollowUpReminder[]
+  notifications     Notification[]
 
   @@unique([gmailConnectionId, gmailThreadId])
   @@index([tenantId, latestMessageAt])
+}
+
+model IdentityProfile {
+  id          String   @id @default(cuid())
+  userId      String
+  label       String
+  displayName String
+  email       String
+  role        String?
+  company     String?
+  phone       String?
+  website     String?
+  pronouns    String?
+  signature   String   @db.Text
+  closing     String
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, label])
+  @@index([userId, isDefault])
+}
+
+enum ReminderStatus {
+  OPEN
+  SNOOZED
+  DONE
+}
+
+model FollowUpReminder {
+  id        String         @id @default(cuid())
+  userId    String
+  threadId  String?
+  title     String
+  note      String?        @db.Text
+  dueAt     DateTime
+  status    ReminderStatus @default(OPEN)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  thread    EmailThread?   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, dueAt])
+}
+
+enum NotificationKind {
+  ATTENTION
+  FOLLOW_UP
+  DRAFT_READY
+  SYSTEM
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  threadId  String?
+  kind      NotificationKind
+  title     String
+  body      String           @db.Text
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  thread    EmailThread?     @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique @db.Text
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model EmailMessage {

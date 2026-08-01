@@ -69,8 +69,8 @@ export const replyOutputSchema = z
     }
     for (let left = 0; left < normalized.length; left += 1) {
       for (let right = left + 1; right < normalized.length; right += 1) {
-        const a = new Set(normalized[left].split(" "));
-        const b = new Set(normalized[right].split(" "));
+        const a = new Set(normalized[left]!.split(" "));
+        const b = new Set(normalized[right]!.split(" "));
         const overlap = [...a].filter((word) => b.has(word)).length;
         const union = new Set([...a, ...b]).size;
         if (union && overlap / union > 0.9) {

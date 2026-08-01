@@ -159,7 +159,7 @@ export async function generateReplies(rawRequest: unknown, actorId?: string) {
   return replyOutputSchema.parse({
     schemaVersion: generation.schemaVersion,
     drafts: options.map((option) => ({
-      label: validated.drafts[option.rank - 1].label,
+      label: validated.drafts[option.rank - 1]!.label,
       body: option.body,
     })),
   });
