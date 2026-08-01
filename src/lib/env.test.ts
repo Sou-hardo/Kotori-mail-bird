@@ -8,6 +8,10 @@ const valid = {
   AUTH_SECRET: "a-secret-that-is-at-least-32-characters",
   AUTH_GOOGLE_ID: "client-id",
   AUTH_GOOGLE_SECRET: "client-secret",
+  APP_URL: "http://localhost:3000",
+  GMAIL_OAUTH_CLIENT_ID: "gmail-client-id",
+  GMAIL_OAUTH_CLIENT_SECRET: "gmail-client-secret",
+  GMAIL_OAUTH_REDIRECT_URI: "http://localhost:3000/api/gmail/callback",
   CREDENTIAL_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
 };
 

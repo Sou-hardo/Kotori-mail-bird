@@ -42,6 +42,7 @@ enum ProcessingStatus {
   SUCCEEDED
   FAILED
   CANCELLED
+  DEAD_LETTER
 }
 
 enum DraftStatus {
@@ -291,6 +292,10 @@ model ProcessingJob {
   output      Json?
   error       String?          @db.Text
   attempts    Int              @default(0)
+  maxAttempts Int              @default(5)
+  queueJobId  String?
+  leaseOwner  String?
+  leaseExpiresAt DateTime?
   scheduledAt DateTime         @default(now())
   startedAt   DateTime?
   completedAt DateTime?
@@ -300,6 +305,7 @@ model ProcessingJob {
 
   @@unique([tenantId, kind, dedupeKey])
   @@index([status, scheduledAt])
+  @@index([leaseExpiresAt])
 }
 
 model AuditEvent {
