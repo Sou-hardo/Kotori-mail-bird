@@ -1,0 +1,318 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TenantRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum ConnectionStatus {
+  ACTIVE
+  REAUTH_REQUIRED
+  REVOKED
+  ERROR
+}
+
+enum SyncStatus {
+  IDLE
+  RUNNING
+  FAILED
+}
+
+enum ThreadCategory {
+  ACTION_REQUIRED
+  WAITING
+  FYI
+  NEWSLETTER
+  RECEIPT
+  SPAM
+  UNKNOWN
+}
+
+enum ProcessingStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum DraftStatus {
+  SUGGESTED
+  APPROVED
+  CREATED_IN_GMAIL
+  DISCARDED
+}
+
+enum AuditAction {
+  CONNECTION_CREATED
+  CONNECTION_REVOKED
+  SYNC_STARTED
+  SYNC_COMPLETED
+  CLASSIFICATION_CREATED
+  REPLY_GENERATED
+  GMAIL_DRAFT_CREATED
+}
+
+model User {
+  id            String       @id @default(cuid())
+  name          String?
+  email         String?      @unique
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  accounts      Account[]
+  sessions      Session[]
+  memberships   Membership[]
+  auditEvents   AuditEvent[] @relation("AuditActor")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Tenant {
+  id          String            @id @default(cuid())
+  slug        String            @unique
+  name        String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  memberships Membership[]
+  connections GmailConnection[]
+  threads     EmailThread[]
+  jobs        ProcessingJob[]
+  auditEvents AuditEvent[]
+}
+
+model Membership {
+  id        String     @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      TenantRole @default(MEMBER)
+  createdAt DateTime   @default(now())
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+}
+
+model GmailConnection {
+  id                   String           @id @default(cuid())
+  tenantId             String
+  googleAccountId      String
+  emailAddress         String
+  encryptedCredentials String           @db.Text
+  scopes               String[]
+  status               ConnectionStatus @default(ACTIVE)
+  lastError             String?          @db.Text
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  syncState             SyncState?
+  threads               EmailThread[]
+
+  @@unique([tenantId, googleAccountId])
+  @@unique([tenantId, emailAddress])
+  @@index([tenantId, status])
+}
+
+model SyncState {
+  id                 String          @id @default(cuid())
+  gmailConnectionId String          @unique
+  historyId          String?
+  pageToken          String?
+  status             SyncStatus      @default(IDLE)
+  lastStartedAt      DateTime?
+  lastCompletedAt    DateTime?
+  lastError          String?         @db.Text
+  updatedAt          DateTime        @updatedAt
+  gmailConnection    GmailConnection @relation(fields: [gmailConnectionId], references: [id], onDelete: Cascade)
+}
+
+model EmailThread {
+  id                String             @id @default(cuid())
+  tenantId          String
+  gmailConnectionId String
+  gmailThreadId     String
+  subject           String?
+  snippet           String?            @db.Text
+  latestMessageAt   DateTime
+  isUnread          Boolean            @default(false)
+  labelIds          String[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  gmailConnection   GmailConnection     @relation(fields: [gmailConnectionId], references: [id], onDelete: Cascade)
+  messages          EmailMessage[]
+  classification    Classification?
+  summary           ThreadSummary?
+  replyOptions      ReplyOption[]
+  gmailDrafts       GmailDraft[]
+
+  @@unique([gmailConnectionId, gmailThreadId])
+  @@index([tenantId, latestMessageAt])
+}
+
+model EmailMessage {
+  id              String       @id @default(cuid())
+  threadId        String
+  gmailMessageId  String
+  internetMessageId String?
+  fromAddress     String
+  toAddresses     String[]
+  ccAddresses     String[]
+  sentAt          DateTime
+  snippet         String?      @db.Text
+  bodyText        String?      @db.Text
+  bodyHtml        String?      @db.Text
+  headers         Json?
+  createdAt       DateTime     @default(now())
+  thread          EmailThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  attachments     Attachment[]
+
+  @@unique([threadId, gmailMessageId])
+  @@index([threadId, sentAt])
+}
+
+model Attachment {
+  id                String       @id @default(cuid())
+  messageId         String
+  gmailAttachmentId String
+  filename          String?
+  mimeType          String
+  sizeBytes         Int
+  contentId         String?
+  message           EmailMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, gmailAttachmentId])
+}
+
+model Classification {
+  id          String         @id @default(cuid())
+  threadId    String         @unique
+  category    ThreadCategory
+  confidence  Float
+  rationale   String?        @db.Text
+  model       String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  thread      EmailThread    @relation(fields: [threadId], references: [id], onDelete: Cascade)
+}
+
+model ThreadSummary {
+  id               String      @id @default(cuid())
+  threadId         String      @unique
+  summary          String      @db.Text
+  requestedActions String[]
+  model            String
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  thread           EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+}
+
+model ReplyOption {
+  id        String      @id @default(cuid())
+  threadId  String
+  tone      String
+  body      String      @db.Text
+  model     String
+  rank      Int
+  createdAt DateTime    @default(now())
+  thread    EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  gmailDraft GmailDraft?
+
+  @@unique([threadId, rank])
+}
+
+model GmailDraft {
+  id             String      @id @default(cuid())
+  threadId       String
+  replyOptionId  String?     @unique
+  gmailDraftId   String?     @unique
+  status         DraftStatus @default(SUGGESTED)
+  subject        String?
+  body           String      @db.Text
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  thread         EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  replyOption    ReplyOption? @relation(fields: [replyOptionId], references: [id], onDelete: SetNull)
+
+  @@index([threadId, status])
+}
+
+model ProcessingJob {
+  id          String           @id @default(cuid())
+  tenantId    String
+  kind        String
+  dedupeKey   String?
+  status      ProcessingStatus @default(PENDING)
+  input       Json?
+  output      Json?
+  error       String?          @db.Text
+  attempts    Int              @default(0)
+  scheduledAt DateTime         @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, kind, dedupeKey])
+  @@index([status, scheduledAt])
+}
+
+model AuditEvent {
+  id        String      @id @default(cuid())
+  tenantId  String
+  actorId   String?
+  action    AuditAction
+  targetType String?
+  targetId  String?
+  metadata  Json?
+  createdAt DateTime    @default(now())
+  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actor     User?       @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+}
