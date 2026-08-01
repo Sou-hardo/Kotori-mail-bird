@@ -84,19 +84,16 @@ export async function PATCH(
           input.action === "reject"
             ? {
                 reason: sanitizeAiText(input.reason, 1_000),
-                body: option.body,
                 version: option.version,
               }
             : input.action === "approve"
               ? {
                   acknowledgements: input.acknowledgements,
-                  body: option.body,
                   version: option.version,
                 }
               : {
-                  previousBody: option.body,
-                  body: targetBody,
                   version: targetVersion,
+                  contentChanged: targetBody !== option.body,
                 },
       },
     });

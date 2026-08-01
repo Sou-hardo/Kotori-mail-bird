@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgresql://kotori:kotori@localhost:5432/kotori?schema=public
+      REDIS_URL: redis://localhost:6379
+      AUTH_SECRET: ci-only-auth-secret-at-least-32-characters
+      AUTH_GOOGLE_ID: ci-google-id
+      AUTH_GOOGLE_SECRET: ci-google-secret
+      APP_URL: http://localhost:3000
+      GMAIL_OAUTH_CLIENT_ID: ci-gmail-id
+      GMAIL_OAUTH_CLIENT_SECRET: ci-gmail-secret
+      GMAIL_OAUTH_REDIRECT_URI: http://localhost:3000/api/gmail/callback
+      CREDENTIAL_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      DEEPSEEK_API_KEY: ci-deepseek-key
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:no-send
+      - run: pnpm db:validate
+      - run: pnpm db:generate
+      - run: pnpm build

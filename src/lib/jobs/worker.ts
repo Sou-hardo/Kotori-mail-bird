@@ -4,8 +4,9 @@ import { db } from "@/lib/db";
 import { getServerEnv } from "@/lib/env";
 import { createGmailDraft } from "@/lib/gmail/drafts";
 import { syncConnection } from "@/lib/gmail/sync";
-import { enqueueSync, QUEUES, type QueueName } from "@/lib/jobs/queues";
+import { enqueueSync, queue, QUEUES, type QueueName } from "@/lib/jobs/queues";
 import { analyzeThread, generateReplies } from "@/lib/ai/service";
+import { runRetentionCleanup } from "@/lib/retention";
 
 const connection = {
   url: getServerEnv().REDIS_URL,
@@ -114,16 +115,17 @@ export function startWorkers() {
   );
   create(QUEUES.reminders, (job) => execute(job, placeholder("reminders")));
   create(QUEUES.push, (job) => execute(job, placeholder("push")));
-  create(QUEUES.retention, (job) =>
-    execute(job, async () => {
-      const cutoff = new Date(Date.now() - 90 * 86400_000);
-      return db.processingJob.deleteMany({
-        where: {
-          completedAt: { lt: cutoff },
-          status: { in: ["SUCCEEDED", "CANCELLED"] },
-        },
-      });
-    }),
+  create(QUEUES.retention, (job) => execute(job, () => runRetentionCleanup()));
+  void queueRetentionCleanup().catch((error) =>
+    console.error("[retention-scheduler]", error),
   );
   return workers;
+}
+
+async function queueRetentionCleanup() {
+  await queue(QUEUES.retention).upsertJobScheduler(
+    "daily-retention-cleanup",
+    { pattern: "17 3 * * *" },
+    { name: "privacy.retention.cleanup", data: {} },
+  );
 }
