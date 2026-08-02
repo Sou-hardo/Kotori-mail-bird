@@ -16,7 +16,8 @@ export const metadata: Metadata = {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const initialToken = await getToken();
+  const initialToken =
+    process.env.PLAYWRIGHT_TEST_MODE === "1" ? null : await getToken();
   return (
     <html lang="en">
       <body>
