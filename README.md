@@ -13,7 +13,7 @@ Kotori is a mobile-first Gmail assistant backed by managed Convex Cloud. Better 
 
 ## Local development
 
-Requirements: Node.js 20.19+, pnpm 10.28+, a Convex account/project, Google OAuth clients, and Gmail API access.
+Requirements: Node.js 22.13+, pnpm 11.18.0, access to the existing Convex project `kotori-db`, Google OAuth clients, and Gmail API access. pnpm 11 requires Node.js 22.13 or newer.
 
 ```bash
 cp .env.example .env.local
@@ -21,6 +21,8 @@ pnpm install --frozen-lockfile
 pnpm dev:convex
 pnpm dev
 ```
+
+When Convex asks which project to use, select the existing `kotori-db` project rather than creating a new one. Keep the generated `CONVEX_DEPLOYMENT`, `NEXT_PUBLIC_CONVEX_URL`, and `NEXT_PUBLIC_CONVEX_SITE_URL` values in local environment files only.
 
 Set Convex backend variables with `pnpm convex env set`: `SITE_URL`, `BETTER_AUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, the Gmail OAuth values, `CREDENTIAL_ENCRYPTION_KEY`, DeepSeek values, and optional VAPID values. The Next.js environment needs `NEXT_PUBLIC_CONVEX_URL`, `NEXT_PUBLIC_CONVEX_SITE_URL`, `APP_URL`, the mailbox callback values, and the same credential-encryption key.
 
@@ -38,7 +40,9 @@ pnpm test:e2e
 pnpm build
 ```
 
-Deploy Convex first with `pnpm convex:deploy`, setting production backend variables in the Convex dashboard. The VPS runs only the Next.js frontend and Caddy:
+The managed backend for this release is the existing Convex project `kotori-db`. Deploy Convex first with `pnpm convex:deploy`, setting production backend variables in the Convex dashboard.
+
+The live VPS rollout of the Next.js frontend and Caddy is deferred. The commands below are the release runbook for the eventual approved rollout; they do not indicate that v0.2.0 is currently live on the VPS:
 
 ```bash
 cp .env.production.example .env.production
@@ -47,4 +51,8 @@ docker compose --env-file .env.production -f compose.production.yml up -d
 curl -fsS https://mail.example.com/api/health
 ```
 
+The production example contains only values used by the VPS frontend. Keep backend-only Better Auth, Google sign-in, DeepSeek, and private VAPID secrets in Convex rather than copying them to the VPS environment.
+
 Convex provides managed persistence, deployment history, and platform backups; define recovery and retention requirements in the Convex project plan. Preserve `CREDENTIAL_ENCRYPTION_KEY` in an encrypted secret manager because rotating it without re-encrypting grants makes existing Gmail connections unreadable.
+
+See [the v0.2.0 release notes](docs/releases/v0.2.0.md) for release scope and rollout status.
