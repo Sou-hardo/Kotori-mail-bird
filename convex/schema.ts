@@ -174,7 +174,9 @@ export default defineSchema({
     status: reminderStatus,
     scheduledWorkId: v.optional(v.string()),
     ...timestamps,
-  }).index("by_user_status_due", ["userId", "status", "dueAt"]),
+  })
+    .index("by_user_status_due", ["userId", "status", "dueAt"])
+    .index("by_thread", ["threadId"]),
   notifications: defineTable({
     userId: v.id("users"),
     threadId: v.optional(v.id("emailThreads")),
@@ -183,7 +185,9 @@ export default defineSchema({
     body: v.string(),
     readAt: v.optional(v.number()),
     createdAt: v.number(),
-  }).index("by_user_read_created", ["userId", "readAt", "createdAt"]),
+  })
+    .index("by_user_read_created", ["userId", "readAt", "createdAt"])
+    .index("by_thread", ["threadId"]),
   pushSubscriptions: defineTable({
     userId: v.id("users"),
     endpoint: v.string(),
@@ -284,5 +288,7 @@ export default defineSchema({
     targetId: v.optional(v.string()),
     metadata: v.optional(v.any()),
     createdAt: v.number(),
-  }).index("by_tenant_created", ["tenantId", "createdAt"]),
+  })
+    .index("by_tenant_created", ["tenantId", "createdAt"])
+    .index("by_created", ["createdAt"]),
 });

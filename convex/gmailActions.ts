@@ -21,9 +21,10 @@ export const sync = internalAction({
     forceFull: v.boolean(),
   },
   handler: async (ctx, args) => {
-    const connection = await ctx.runQuery(internal.gmailData.connection, {
+    const syncContext = await ctx.runQuery(internal.gmailData.syncContext, {
       connectionId: args.connectionId,
     });
+    const connection = syncContext?.connection;
     if (!connection || connection.status !== "ACTIVE") return { skipped: true };
     const oauth = new google.auth.OAuth2(
       process.env.GMAIL_OAUTH_CLIENT_ID,
@@ -32,29 +33,95 @@ export const sync = internalAction({
     );
     oauth.setCredentials(await decrypt(connection.encryptedCredentials));
     const gmail = google.gmail({ version: "v1", auth: oauth });
-    const listing = await gmail.users.threads.list({
-      userId: "me",
-      labelIds: ["INBOX"],
-      maxResults: 50,
-    });
-    let saved = 0;
-    for (const summary of listing.data.threads ?? []) {
-      if (!summary.id) continue;
-      const response = await gmail.users.threads.get({
-        userId: "me",
-        id: summary.id,
-        format: "full",
-      });
-      await ctx.runMutation(internal.gmailData.saveThread, {
-        connectionId: args.connectionId,
-        thread: response.data as any,
-      });
-      saved++;
-    }
-    await ctx.runMutation(internal.gmailData.finishSync, {
+    await ctx.runMutation(internal.gmailData.beginSync, {
       connectionId: args.connectionId,
+      forceFull: args.forceFull,
     });
-    return { threads: saved };
+    try {
+      const threadIds = new Set<string>();
+      const deletedMessageIds = new Set<string>();
+      let newestHistoryId = syncContext?.state?.historyId;
+      const useHistory =
+        !args.forceFull && Boolean(syncContext?.state?.historyId);
+      if (useHistory) {
+        let pageToken: string | undefined = syncContext?.state?.pageToken;
+        for (let page = 0; page < 4; page++) {
+          const response = await gmail.users.history.list({
+            userId: "me",
+            startHistoryId: syncContext!.state!.historyId!,
+            pageToken,
+            maxResults: 100,
+            historyTypes: [
+              "messageAdded",
+              "messageDeleted",
+              "labelAdded",
+              "labelRemoved",
+            ],
+          });
+          newestHistoryId = response.data.historyId ?? newestHistoryId;
+          for (const history of response.data.history ?? []) {
+            for (const message of [
+              ...(history.messagesAdded ?? []),
+              ...(history.labelsAdded ?? []),
+              ...(history.labelsRemoved ?? []),
+            ].map((item) => item.message))
+              if (message?.threadId) threadIds.add(message.threadId);
+            for (const item of history.messagesDeleted ?? [])
+              if (item.message?.id) deletedMessageIds.add(item.message.id);
+          }
+          pageToken = response.data.nextPageToken ?? undefined;
+          if (!pageToken) break;
+          if (page === 3) throw new Error("gmail_history_page_limit_exceeded");
+        }
+      } else {
+        let pageToken: string | undefined;
+        for (let page = 0; page < 4 && threadIds.size < 200; page++) {
+          const listing = await gmail.users.threads.list({
+            userId: "me",
+            labelIds: ["INBOX"],
+            q: "newer_than:14d",
+            maxResults: Math.min(50, 200 - threadIds.size),
+            pageToken,
+          });
+          newestHistoryId =
+            listing.data.threads?.[0]?.historyId ?? newestHistoryId;
+          for (const thread of listing.data.threads ?? [])
+            if (thread.id) threadIds.add(thread.id);
+          pageToken = listing.data.nextPageToken ?? undefined;
+          if (!pageToken) break;
+        }
+      }
+      if (deletedMessageIds.size)
+        await ctx.runMutation(internal.gmailData.deleteGmailMessages, {
+          connectionId: args.connectionId,
+          gmailMessageIds: [...deletedMessageIds],
+        });
+      let saved = 0;
+      for (const id of threadIds) {
+        const response = await gmail.users.threads.get({
+          userId: "me",
+          id,
+          format: "full",
+        });
+        newestHistoryId = response.data.historyId ?? newestHistoryId;
+        await ctx.runMutation(internal.gmailData.saveThread, {
+          connectionId: args.connectionId,
+          thread: response.data as any,
+        });
+        saved++;
+      }
+      await ctx.runMutation(internal.gmailData.finishSync, {
+        connectionId: args.connectionId,
+        historyId: newestHistoryId,
+      });
+      return { threads: saved, incremental: useHistory };
+    } catch (error) {
+      await ctx.runMutation(internal.gmailData.failSync, {
+        connectionId: args.connectionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   },
 });
 
@@ -74,7 +141,22 @@ export const createDraft = internalAction({
     );
     oauth.setCredentials(await decrypt(data.connection.encryptedCredentials));
     const gmail = google.gmail({ version: "v1", auth: oauth });
+    const operationMessageId = `<kotori-${draftId}@draft.local>`;
+    const prior = await gmail.users.drafts.list({
+      userId: "me",
+      q: `rfc822msgid:${operationMessageId}`,
+      maxResults: 1,
+    });
+    const priorId = prior.data.drafts?.[0]?.id;
+    if (priorId) {
+      await ctx.runMutation(internal.gmailData.markDraftCreated, {
+        draftId,
+        gmailDraftId: priorId,
+      });
+      return { gmailDraftId: priorId, reconciled: true };
+    }
     const headers = [
+      `Message-ID: ${operationMessageId}`,
       `To: ${data.draft.toAddresses.join(", ")}`,
       data.draft.ccAddresses.length
         ? `Cc: ${data.draft.ccAddresses.join(", ")}`

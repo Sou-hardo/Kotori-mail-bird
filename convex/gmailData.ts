@@ -1,9 +1,70 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
+import { internal } from "./_generated/api";
 export const connection = internalQuery({
   args: { connectionId: v.id("gmailConnections") },
   handler: (ctx, a) => ctx.db.get(a.connectionId),
+});
+export const syncContext = internalQuery({
+  args: { connectionId: v.id("gmailConnections") },
+  handler: async (ctx, { connectionId }) => {
+    const connection = await ctx.db.get(connectionId);
+    if (!connection) return null;
+    const state = await ctx.db
+      .query("syncStates")
+      .withIndex("by_connection", (q) =>
+        q.eq("gmailConnectionId", connectionId),
+      )
+      .unique();
+    return { connection, state };
+  },
+});
+export const beginSync = internalMutation({
+  args: { connectionId: v.id("gmailConnections"), forceFull: v.boolean() },
+  handler: async (ctx, { connectionId, forceFull }) => {
+    const connection = await ctx.db.get(connectionId);
+    if (!connection) throw new Error("connection_not_found");
+    const state = await ctx.db
+      .query("syncStates")
+      .withIndex("by_connection", (q) =>
+        q.eq("gmailConnectionId", connectionId),
+      )
+      .unique();
+    const now = Date.now();
+    if (state)
+      await ctx.db.patch(state._id, {
+        status: "RUNNING",
+        lastStartedAt: now,
+        lastError: undefined,
+        ...(forceFull ? { pageToken: undefined } : {}),
+        updatedAt: now,
+      });
+    await ctx.db.insert("auditEvents", {
+      tenantId: connection.tenantId,
+      action: "SYNC_STARTED",
+      targetType: "GmailConnection",
+      targetId: String(connectionId),
+      createdAt: now,
+    });
+  },
+});
+export const failSync = internalMutation({
+  args: { connectionId: v.id("gmailConnections"), error: v.string() },
+  handler: async (ctx, { connectionId, error }) => {
+    const state = await ctx.db
+      .query("syncStates")
+      .withIndex("by_connection", (q) =>
+        q.eq("gmailConnectionId", connectionId),
+      )
+      .unique();
+    if (state)
+      await ctx.db.patch(state._id, {
+        status: "FAILED",
+        lastError: error.slice(0, 2000),
+        updatedAt: Date.now(),
+      });
+  },
 });
 const header = (headers: any[], name: string) =>
   headers?.find((x) => String(x.name).toLowerCase() === name.toLowerCase())
@@ -65,8 +126,7 @@ export const saveThread = internalMutation({
           q.eq("threadId", row!._id).eq("gmailMessageId", m.id),
         )
         .unique();
-      if (old) continue;
-      await ctx.db.insert("emailMessages", {
+      const messageData = {
         threadId: row._id,
         gmailMessageId: m.id,
         internetMessageId: header(m.payload?.headers, "Message-ID"),
@@ -81,9 +141,70 @@ export const saveThread = internalMutation({
         snippet: m.snippet,
         bodyText: bodyText(m.payload),
         headers: m.payload?.headers,
-        createdAt: now,
-      });
+      };
+      let messageId;
+      if (old) {
+        await ctx.db.patch(old._id, messageData);
+        messageId = old._id;
+      } else
+        messageId = await ctx.db.insert("emailMessages", {
+          ...messageData,
+          createdAt: now,
+        });
+      const attachmentIds = new Set<string>();
+      const walk = async (payload: any) => {
+        if (payload?.body?.attachmentId) {
+          attachmentIds.add(payload.body.attachmentId);
+          const existing = await ctx.db
+            .query("attachments")
+            .withIndex("by_message_gmail", (q) =>
+              q
+                .eq("messageId", messageId)
+                .eq("gmailAttachmentId", payload.body.attachmentId),
+            )
+            .unique();
+          const attachment = {
+            messageId,
+            gmailAttachmentId: payload.body.attachmentId,
+            filename: payload.filename || undefined,
+            mimeType: payload.mimeType ?? "application/octet-stream",
+            sizeBytes: Number(payload.body.size) || 0,
+            contentId: header(payload.headers, "Content-ID"),
+          };
+          if (existing) await ctx.db.patch(existing._id, attachment);
+          else await ctx.db.insert("attachments", attachment);
+        }
+        for (const part of payload?.parts ?? []) await walk(part);
+      };
+      await walk(m.payload);
+      for (const attachment of await ctx.db
+        .query("attachments")
+        .withIndex("by_message_gmail", (q) => q.eq("messageId", messageId))
+        .collect())
+        if (!attachmentIds.has(attachment.gmailAttachmentId))
+          await ctx.db.delete(attachment._id);
     }
+    const liveMessageIds = new Set(
+      messages.map((m: any) => m.id).filter(Boolean),
+    );
+    for (const old of await ctx.db
+      .query("emailMessages")
+      .withIndex("by_thread_sent", (q) => q.eq("threadId", row!._id))
+      .collect())
+      if (!liveMessageIds.has(old.gmailMessageId)) {
+        for (const attachment of await ctx.db
+          .query("attachments")
+          .withIndex("by_message_gmail", (q) => q.eq("messageId", old._id))
+          .collect())
+          await ctx.db.delete(attachment._id);
+        await ctx.db.delete(old._id);
+      }
+    await ctx.scheduler.runAfter(0, internal.jobs.enqueueInternal, {
+      tenantId: c.tenantId,
+      kind: "ai.thread.analyze",
+      input: { threadId: row._id, version: String(now) },
+      dedupeKey: `${row._id}:${latest}`,
+    });
     return row._id;
   },
 });
@@ -106,6 +227,45 @@ export const finishSync = internalMutation({
         lastCompletedAt: Date.now(),
         updatedAt: Date.now(),
       });
+    const connection = await ctx.db.get(a.connectionId);
+    if (connection)
+      await ctx.db.insert("auditEvents", {
+        tenantId: connection.tenantId,
+        action: "SYNC_COMPLETED",
+        targetType: "GmailConnection",
+        targetId: String(a.connectionId),
+        createdAt: Date.now(),
+      });
+  },
+});
+export const deleteGmailMessages = internalMutation({
+  args: {
+    connectionId: v.id("gmailConnections"),
+    gmailMessageIds: v.array(v.string()),
+  },
+  handler: async (ctx, { connectionId, gmailMessageIds }) => {
+    const threads = await ctx.db
+      .query("emailThreads")
+      .withIndex("by_connection_gmail", (q) =>
+        q.eq("gmailConnectionId", connectionId),
+      )
+      .collect();
+    const wanted = new Set(gmailMessageIds);
+    for (const thread of threads)
+      for (const message of await ctx.db
+        .query("emailMessages")
+        .withIndex("by_thread_sent", (q) => q.eq("threadId", thread._id))
+        .collect())
+        if (wanted.has(message.gmailMessageId)) {
+          for (const attachment of await ctx.db
+            .query("attachments")
+            .withIndex("by_message_gmail", (q) =>
+              q.eq("messageId", message._id),
+            )
+            .collect())
+            await ctx.db.delete(attachment._id);
+          await ctx.db.delete(message._id);
+        }
   },
 });
 export const draftContext = internalQuery({
