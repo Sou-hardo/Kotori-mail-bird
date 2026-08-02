@@ -380,7 +380,6 @@ export const replyAction = mutation({
     body: v.optional(v.string()),
     reason: v.optional(v.string()),
     acknowledgements: v.optional(v.array(v.string())),
-    metadata: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
     const p = await requirePrincipal(ctx);
@@ -392,14 +391,23 @@ export const replyAction = mutation({
     if (!["edit", "reject", "approve"].includes(args.action))
       throw new Error("invalid_action");
     let body = option.body,
-      version = option.version;
+      version = option.version,
+      auditMetadata: Record<string, unknown> = { version };
     if (args.action === "edit") {
       body = String(args.body ?? "")
         .replace(/<[^>]*>/g, "")
         .slice(0, 20000);
       version++;
       await ctx.db.patch(option._id, { body, version });
+      auditMetadata = { version, contentChanged: body !== option.body };
     }
+    if (args.action === "reject")
+      auditMetadata = {
+        version,
+        reason: String(args.reason ?? "")
+          .replace(/<[^>]*>/g, "")
+          .slice(0, 1000),
+      };
     if (args.action === "approve") {
       const connection = await ctx.db.get(thread.gmailConnectionId);
       const messages = await ctx.db
@@ -455,6 +463,12 @@ export const replyAction = mutation({
           requiredReviewFlags: required,
           updatedAt: Date.now(),
         });
+      auditMetadata = {
+        version,
+        acknowledgements: [...acknowledged],
+        requiredReviewFlags: required,
+        recipients: [...to, ...cc],
+      };
       const existing = await ctx.db
         .query("gmailDrafts")
         .withIndex("by_reply_option", (q) => q.eq("replyOptionId", option._id))
@@ -483,7 +497,7 @@ export const replyAction = mutation({
             : "REPLY_APPROVED",
       targetType: "ReplyOption",
       targetId: String(option._id),
-      metadata: args.metadata,
+      metadata: auditMetadata,
       createdAt: Date.now(),
     });
     return { id: option._id, body, version };

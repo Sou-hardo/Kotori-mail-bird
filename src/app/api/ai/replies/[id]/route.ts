@@ -1,15 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { createHash } from "node:crypto";
 import { REVIEW_FLAGS, detectReviewFlags } from "@/lib/ai/safety";
 import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server";
 import { convexApi } from "@/lib/convex-api";
 import { latestInbound, replyAllRecipients } from "@/lib/gmail/recipients";
-
-const hash = (value: string) =>
-  createHash("sha256").update(value, "utf8").digest("hex");
 
 const actionSchema = z.discriminatedUnion("action", [
   z
@@ -88,34 +84,6 @@ export async function PATCH(
     reason: input.action === "reject" ? input.reason : undefined,
     acknowledgements:
       input.action === "approve" ? input.acknowledgements : undefined,
-    metadata:
-      input.action === "reject"
-        ? {
-            reason: sanitizeAiText(input.reason, 1_000),
-            version: option.version,
-          }
-        : input.action === "approve"
-          ? {
-              acknowledgements: input.acknowledgements,
-              version: option.version,
-              bodyHash: hash(option.body),
-              recipients: [...recipients.to, ...recipients.cc],
-              recipientsHash: hash(JSON.stringify(recipients)),
-              requiredReviewFlags: currentFlags,
-            }
-          : {
-              version: option.version + 1,
-              contentChanged: sanitizeAiText(input.body) !== option.body,
-              beforeBodyHash: hash(option.body),
-              afterBodyHash: hash(sanitizeAiText(input.body)),
-              requiredReviewFlags: detectReviewFlags(option.thread, {
-                body: sanitizeAiText(input.body),
-                intent: option.intent,
-                identity: option.generation?.identity,
-                closing: option.generation?.closing,
-                recipients: [...recipients.to, ...recipients.cc],
-              }),
-            },
   });
   return NextResponse.json({
     id: result.id,
