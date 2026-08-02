@@ -11,6 +11,28 @@ export const currentPrincipal = query({
   },
 });
 
+export const getReplyPreference = query({
+  args: {},
+  handler: async (ctx) => {
+    const { user } = await requirePrincipal(ctx);
+    return {
+      generateThreeSuggestions: user.generateThreeSuggestions ?? false,
+    };
+  },
+});
+
+export const setReplyPreference = mutation({
+  args: { generateThreeSuggestions: v.boolean() },
+  handler: async (ctx, { generateThreeSuggestions }) => {
+    const { userId } = await requirePrincipal(ctx);
+    await ctx.db.patch(userId, {
+      generateThreeSuggestions,
+      updatedAt: Date.now(),
+    });
+    return { generateThreeSuggestions };
+  },
+});
+
 export const listInbox = query({
   args: { q: v.optional(v.string()), filter: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -103,6 +125,7 @@ export const getThread = query({
         .collect(),
       ctx.db.get(thread.gmailConnectionId),
     ]);
+    if (!connection) return null;
     const generation = generations[0];
     const options = generation
       ? await ctx.db
@@ -115,7 +138,7 @@ export const getThread = query({
     return {
       ...dto(thread),
       messages: messages.map((m) => ({ ...dto(m), attachments: [] })),
-      gmailConnection: connection ? dto(connection) : null,
+      gmailConnection: dto(connection),
       summary: summary ? dto(summary) : null,
       classification: classification ? dto(classification) : null,
       replyGenerations: generation
@@ -136,7 +159,14 @@ export const listIdentities = query({
         .withIndex("by_user_default", (q) => q.eq("userId", userId))
         .collect()
     )
-      .map(dto)
+      .map((identity) => ({
+        ...dto(identity),
+        role: identity.role ?? null,
+        company: identity.company ?? null,
+        phone: identity.phone ?? null,
+        website: identity.website ?? null,
+        pronouns: identity.pronouns ?? null,
+      }))
       .sort((a, b) => String(a.label).localeCompare(String(b.label)));
   },
 });
@@ -194,7 +224,10 @@ export const listReminders = query({
         .withIndex("by_user_status_due", (q) => q.eq("userId", userId))
         .collect()
     )
-      .map(dto)
+      .map((reminder) => ({
+        ...dto(reminder),
+        note: reminder.note ?? null,
+      }))
       .sort((a, b) => String(a.dueAt).localeCompare(String(b.dueAt)));
   },
 });

@@ -3,6 +3,7 @@
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 
 export const run = internalAction({
   args: { jobId: v.id("processingJobs") },
@@ -10,26 +11,49 @@ export const run = internalAction({
     const job = await ctx.runMutation(internal.jobs.start, { jobId });
     if (!job) return { deduplicated: true };
     switch (job.kind) {
-      case "gmail.sync":
+      case "gmail.sync": {
+        const input = job.input as {
+          connectionId: Id<"gmailConnections">;
+          forceFull: boolean;
+        };
         return ctx.runAction(internal.gmailActions.sync, {
           jobId,
-          ...(job.input as object),
+          ...input,
         });
-      case "gmail.draft.create":
+      }
+      case "gmail.draft.create": {
+        const input = job.input as { draftId: Id<"gmailDrafts"> };
         return ctx.runAction(internal.gmailActions.createDraft, {
           jobId,
-          ...(job.input as object),
+          ...input,
         });
-      case "ai.thread.analyze":
+      }
+      case "ai.thread.analyze": {
+        const input = job.input as {
+          threadId: Id<"emailThreads">;
+          version?: string;
+        };
         return ctx.runAction(internal.aiActions.analyze, {
           jobId,
-          ...(job.input as object),
+          ...input,
         });
-      case "ai.reply.generate":
+      }
+      case "ai.reply.generate": {
+        const input = job.input as {
+          threadId: Id<"emailThreads">;
+          actorId: Id<"users">;
+          identityId: Id<"identityProfiles">;
+          intent: string;
+          tone: string;
+          length: string;
+          acknowledgements: string[];
+          suggestionCount: 1 | 3;
+        };
         return ctx.runAction(internal.aiActions.generateReplies, {
           jobId,
-          ...(job.input as object),
+          ...input,
         });
+      }
       case "reminder.due":
         return ctx.runMutation(internal.reminders.fire, job.input as any);
       case "notification.push":

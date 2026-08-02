@@ -4,6 +4,26 @@ import { google } from "googleapis";
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
+
+type SyncContext = {
+  connection: Doc<"gmailConnections">;
+  state: Doc<"syncStates"> | null;
+};
+
+type SyncResult = { skipped: true } | { threads: number; incremental: boolean };
+
+type DraftContext = {
+  draft: Doc<"gmailDrafts">;
+  thread: Doc<"emailThreads">;
+  connection: Doc<"gmailConnections">;
+};
+
+type DraftResult = {
+  gmailDraftId: string | undefined;
+  deduplicated?: true;
+  reconciled?: true;
+};
 
 const decrypt = async (encrypted: string) => {
   const { decryptCredentials } =
@@ -20,10 +40,11 @@ export const sync = internalAction({
     connectionId: v.id("gmailConnections"),
     forceFull: v.boolean(),
   },
-  handler: async (ctx, args) => {
-    const syncContext = await ctx.runQuery(internal.gmailData.syncContext, {
-      connectionId: args.connectionId,
-    });
+  handler: async (ctx, args): Promise<SyncResult> => {
+    const syncContext: SyncContext | null = await ctx.runQuery(
+      internal.gmailData.syncContext,
+      { connectionId: args.connectionId },
+    );
     const connection = syncContext?.connection;
     if (!connection || connection.status !== "ACTIVE") return { skipped: true };
     const oauth = new google.auth.OAuth2(
@@ -33,116 +54,135 @@ export const sync = internalAction({
     );
     oauth.setCredentials(await decrypt(connection.encryptedCredentials));
     const gmail = google.gmail({ version: "v1", auth: oauth });
-    await ctx.runMutation(internal.gmailData.beginSync, {
-      connectionId: args.connectionId,
-      forceFull: args.forceFull,
-    });
-    try {
-      const threadIds = new Set<string>();
-      const deletedMessageIds = new Set<string>();
-      let newestHistoryId = syncContext?.state?.historyId;
-      const useHistory =
-        !args.forceFull && Boolean(syncContext?.state?.historyId);
-      if (useHistory) {
-        let pageToken: string | undefined = syncContext?.state?.pageToken;
-        for (let page = 0; page < 4; page++) {
-          const response = await gmail.users.history.list({
-            userId: "me",
-            startHistoryId: syncContext!.state!.historyId!,
-            pageToken,
-            maxResults: 100,
-            historyTypes: [
-              "messageAdded",
-              "messageDeleted",
-              "labelAdded",
-              "labelRemoved",
-            ],
-          });
-          newestHistoryId = response.data.historyId ?? newestHistoryId;
-          for (const history of response.data.history ?? []) {
-            for (const message of [
-              ...(history.messagesAdded ?? []),
-              ...(history.labelsAdded ?? []),
-              ...(history.labelsRemoved ?? []),
-            ].map((item) => item.message))
-              if (message?.threadId) threadIds.add(message.threadId);
-            for (const item of history.messagesDeleted ?? [])
-              if (item.message?.id) deletedMessageIds.add(item.message.id);
+    let useHistory = !args.forceFull && Boolean(syncContext?.state?.historyId);
+
+    for (;;) {
+      await ctx.runMutation(internal.gmailData.beginSync, {
+        connectionId: args.connectionId,
+        forceFull: !useHistory,
+      });
+      try {
+        const persistChanges = async (
+          threadIds: Set<string>,
+          deletedMessageIds: Set<string>,
+        ) => {
+          if (deletedMessageIds.size)
+            await ctx.runMutation(internal.gmailData.deleteGmailMessages, {
+              connectionId: args.connectionId,
+              gmailMessageIds: [...deletedMessageIds],
+            });
+          let saved = 0;
+          for (const id of threadIds) {
+            const response = await gmail.users.threads.get({
+              userId: "me",
+              id,
+              format: "full",
+            });
+            await ctx.runMutation(internal.gmailData.saveThread, {
+              connectionId: args.connectionId,
+              thread: response.data as any,
+            });
+            saved++;
           }
-          pageToken = response.data.nextPageToken ?? undefined;
-          await ctx.runMutation(internal.gmailData.syncProgress, {
-            connectionId: args.connectionId,
-            pageToken,
-          });
-          if (!pageToken) break;
-          if (page === 3) throw new Error("gmail_history_page_limit_exceeded");
+          return saved;
+        };
+
+        let historyPageLimitExceeded = false;
+        let newestHistoryId = syncContext?.state?.historyId;
+        let saved = 0;
+        if (useHistory) {
+          let pageToken: string | undefined = syncContext?.state?.pageToken;
+          for (let page = 0; page < 4; page++) {
+            const response = await gmail.users.history.list({
+              userId: "me",
+              startHistoryId: syncContext!.state!.historyId!,
+              pageToken,
+              maxResults: 100,
+              historyTypes: [
+                "messageAdded",
+                "messageDeleted",
+                "labelAdded",
+                "labelRemoved",
+              ],
+            });
+            newestHistoryId = response.data.historyId ?? newestHistoryId;
+            const threadIds = new Set<string>();
+            const deletedMessageIds = new Set<string>();
+            for (const history of response.data.history ?? []) {
+              for (const message of [
+                ...(history.messagesAdded ?? []),
+                ...(history.labelsAdded ?? []),
+                ...(history.labelsRemoved ?? []),
+              ].map((item) => item.message))
+                if (message?.threadId) threadIds.add(message.threadId);
+              for (const item of history.messagesDeleted ?? [])
+                if (item.message?.id) deletedMessageIds.add(item.message.id);
+            }
+            saved += await persistChanges(threadIds, deletedMessageIds);
+            pageToken = response.data.nextPageToken ?? undefined;
+            // Advance the cursor only after this page's effects are durable.
+            // A failed Gmail fetch or Convex mutation will retry this page.
+            await ctx.runMutation(internal.gmailData.syncProgress, {
+              connectionId: args.connectionId,
+              pageToken,
+            });
+            if (!pageToken) break;
+            if (page === 3) historyPageLimitExceeded = true;
+          }
+        } else {
+          // Read the checkpoint before the snapshot so mail arriving during the
+          // full scan is picked up by the next history sync.
+          const profile = await gmail.users.getProfile({ userId: "me" });
+          newestHistoryId = profile.data.historyId ?? newestHistoryId;
+          const threadIds = new Set<string>();
+          let pageToken: string | undefined;
+          for (let page = 0; page < 4 && threadIds.size < 200; page++) {
+            const listing = await gmail.users.threads.list({
+              userId: "me",
+              labelIds: ["INBOX"],
+              q: "newer_than:14d",
+              maxResults: Math.min(50, 200 - threadIds.size),
+              pageToken,
+            });
+            for (const thread of listing.data.threads ?? [])
+              if (thread.id) threadIds.add(thread.id);
+            pageToken = listing.data.nextPageToken ?? undefined;
+            if (!pageToken) break;
+          }
+          saved = await persistChanges(threadIds, new Set());
         }
-      } else {
-        let pageToken: string | undefined;
-        for (let page = 0; page < 4 && threadIds.size < 200; page++) {
-          const listing = await gmail.users.threads.list({
-            userId: "me",
-            labelIds: ["INBOX"],
-            q: "newer_than:14d",
-            maxResults: Math.min(50, 200 - threadIds.size),
-            pageToken,
-          });
-          newestHistoryId =
-            listing.data.threads?.[0]?.historyId ?? newestHistoryId;
-          for (const thread of listing.data.threads ?? [])
-            if (thread.id) threadIds.add(thread.id);
-          pageToken = listing.data.nextPageToken ?? undefined;
-          if (!pageToken) break;
+        if (historyPageLimitExceeded)
+          throw new Error("gmail_history_page_limit_exceeded");
+        await ctx.runMutation(internal.gmailData.finishSync, {
+          connectionId: args.connectionId,
+          historyId: newestHistoryId,
+        });
+        return { threads: saved, incremental: useHistory };
+      } catch (error) {
+        const code =
+          (error as { code?: number; response?: { status?: number } }).code ??
+          (error as { response?: { status?: number } }).response?.status;
+        if (useHistory && code === 404) {
+          useHistory = false;
+          continue;
         }
-      }
-      if (deletedMessageIds.size)
-        await ctx.runMutation(internal.gmailData.deleteGmailMessages, {
+        await ctx.runMutation(internal.gmailData.failSync, {
           connectionId: args.connectionId,
-          gmailMessageIds: [...deletedMessageIds],
+          error: error instanceof Error ? error.message : String(error),
         });
-      let saved = 0;
-      for (const id of threadIds) {
-        const response = await gmail.users.threads.get({
-          userId: "me",
-          id,
-          format: "full",
-        });
-        newestHistoryId = response.data.historyId ?? newestHistoryId;
-        await ctx.runMutation(internal.gmailData.saveThread, {
-          connectionId: args.connectionId,
-          thread: response.data as any,
-        });
-        saved++;
+        throw error;
       }
-      await ctx.runMutation(internal.gmailData.finishSync, {
-        connectionId: args.connectionId,
-        historyId: newestHistoryId,
-      });
-      return { threads: saved, incremental: useHistory };
-    } catch (error) {
-      const code =
-        (error as { code?: number; response?: { status?: number } }).code ??
-        (error as { response?: { status?: number } }).response?.status;
-      if (useHistory && code === 404)
-        return ctx.runAction(internal.gmailActions.sync, {
-          ...args,
-          forceFull: true,
-        });
-      await ctx.runMutation(internal.gmailData.failSync, {
-        connectionId: args.connectionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
     }
   },
 });
 
 export const createDraft = internalAction({
   args: { jobId: v.id("processingJobs"), draftId: v.id("gmailDrafts") },
-  handler: async (ctx, { draftId }) => {
-    const data = await ctx.runQuery(internal.gmailData.draftContext, {
-      draftId,
-    });
+  handler: async (ctx, { draftId }): Promise<DraftResult> => {
+    const data: DraftContext | null = await ctx.runQuery(
+      internal.gmailData.draftContext,
+      { draftId },
+    );
     if (!data) throw new Error("draft_not_found");
     if (data.draft.status === "CREATED_IN_GMAIL")
       return { gmailDraftId: data.draft.gmailDraftId, deduplicated: true };

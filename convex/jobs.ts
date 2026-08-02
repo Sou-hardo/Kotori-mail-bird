@@ -21,8 +21,10 @@ async function authorizeJobInput(
   kind: string,
   input: Record<string, unknown>,
   tenantId: Id<"tenants">,
-  userId: Id<"users">,
-) {
+  user: Doc<"users">,
+): Promise<Record<string, unknown>> {
+  const userId = user._id;
+  const authorizedInput = { ...input };
   if (!publicKinds.has(kind)) throw new Error("job_kind_not_allowed");
   if (typeof input.connectionId === "string") {
     const row = await ctx.db.get(input.connectionId as Id<"gmailConnections">);
@@ -45,7 +47,31 @@ async function authorizeJobInput(
     if (!draft || !draftThread || draftThread.tenantId !== tenantId)
       throw new Error("draft_not_found");
   }
-  if (kind === "ai.reply.generate") input.actorId = String(userId);
+  if (kind === "ai.reply.generate") {
+    const requiredString = (key: string) => {
+      const value = input[key];
+      if (typeof value !== "string" || value.length === 0)
+        throw new Error(`invalid_${key}`);
+      return value;
+    };
+    const acknowledgements = input.acknowledgements;
+    if (
+      !Array.isArray(acknowledgements) ||
+      !acknowledgements.every((value) => typeof value === "string")
+    )
+      throw new Error("invalid_acknowledgements");
+    return {
+      threadId: requiredString("threadId"),
+      identityId: requiredString("identityId"),
+      intent: requiredString("intent"),
+      tone: requiredString("tone"),
+      length: requiredString("length"),
+      acknowledgements,
+      actorId: userId,
+      suggestionCount: user.generateThreeSuggestions === true ? 3 : 1,
+    };
+  }
+  return authorizedInput;
 }
 
 async function createJob(
@@ -101,19 +127,25 @@ export const enqueue = mutation({
     runAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const { tenantId, userId } = await requirePrincipal(ctx);
-    const input = args.input as Record<string, unknown>;
-    await authorizeJobInput(ctx, args.kind, input, tenantId, userId);
-    return dto(
-      await createJob(
-        ctx,
-        tenantId,
-        args.kind,
-        args.input,
-        args.dedupeKey,
-        args.runAt,
-      ),
+    const { tenantId, user } = await requirePrincipal(ctx);
+    const input = await authorizeJobInput(
+      ctx,
+      args.kind,
+      args.input as Record<string, unknown>,
+      tenantId,
+      user,
     );
+    const job = await createJob(
+      ctx,
+      tenantId,
+      args.kind,
+      input,
+      args.kind === "ai.reply.generate" && args.dedupeKey
+        ? `${user._id}:${args.dedupeKey}`
+        : args.dedupeKey,
+      args.runAt,
+    );
+    return { id: job._id, status: job.status };
   },
 });
 
@@ -134,6 +166,55 @@ export const enqueueInternal = internalMutation({
       args.dedupeKey,
       args.runAt,
     ),
+});
+
+export const result = query({
+  args: { jobId: v.string(), threadId: v.string() },
+  handler: async (ctx, { jobId, threadId }) => {
+    const { tenantId, userId } = await requirePrincipal(ctx);
+    const id = ctx.db.normalizeId("processingJobs", jobId);
+    const expectedThreadId = ctx.db.normalizeId("emailThreads", threadId);
+    if (!id || !expectedThreadId) return null;
+    const job = await ctx.db.get(id);
+    if (!job || job.tenantId !== tenantId) return null;
+    if (job.kind !== "ai.reply.generate") return null;
+    const input = job.input as
+      { actorId?: unknown; threadId?: unknown } | undefined;
+    if (
+      input?.actorId !== String(userId) ||
+      input.threadId !== expectedThreadId
+    )
+      return null;
+    let options: ReturnType<typeof dto>[] | undefined;
+    let requiredReviewFlags: string[] | undefined;
+    if (job.status === "SUCCEEDED") {
+      const generationId = ctx.db.normalizeId(
+        "replyGenerations",
+        String(
+          (job.output as { generationId?: unknown } | undefined)
+            ?.generationId ?? "",
+        ),
+      );
+      const generation = generationId ? await ctx.db.get(generationId) : null;
+      if (!generation || generation.threadId !== expectedThreadId) return null;
+      options = (
+        await ctx.db
+          .query("replyOptions")
+          .withIndex("by_generation_rank", (q) =>
+            q.eq("generationId", generation._id),
+          )
+          .collect()
+      ).map(dto);
+      requiredReviewFlags = generation.requiredReviewFlags;
+    }
+    return {
+      id: job._id,
+      status: job.status,
+      ...(job.error === undefined ? {} : { error: job.error }),
+      ...(options === undefined ? {} : { options }),
+      ...(requiredReviewFlags === undefined ? {} : { requiredReviewFlags }),
+    };
+  },
 });
 
 export const start = internalMutation({
