@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { fetchAuthMutation } from "@/lib/auth-server";
 import { convexApi } from "@/lib/convex-api";
-import { identitySchema } from "../route";
+import { identitySchema } from "@/lib/identity-schema";
 export async function PATCH(
   r: Request,
   { params }: { params: Promise<{ id: string }> },

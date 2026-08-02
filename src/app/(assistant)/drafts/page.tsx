@@ -1,4 +1,5 @@
 import Link from "next/link";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { fetchAuthQuery } from "@/lib/auth-server";
 import { convexApi } from "@/lib/convex-api";
 import { DraftAction } from "@/components/draft-action";
@@ -15,7 +16,7 @@ export default async function DraftsPage() {
       </header>
       <div className="thread-list">
         {drafts.length ? (
-          drafts.map((d) => (
+          drafts.map((d: any) => (
             <article className="list-card" key={d.id}>
               <div>
                 <span className="badge">{d.status.replaceAll("_", " ")}</span>

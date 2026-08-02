@@ -1,4 +1,5 @@
 import { fetchAuthQuery } from "@/lib/auth-server";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { convexApi } from "@/lib/convex-api";
 import { PushControl } from "@/components/push-control";
 export default async function NotificationsPage() {
@@ -17,7 +18,7 @@ export default async function NotificationsPage() {
       </header>
       <div className="thread-list">
         {notes.length ? (
-          notes.map((n) => (
+          notes.map((n: any) => (
             <article
               className={`notification ${n.readAt ? "read" : ""}`}
               key={n.id}

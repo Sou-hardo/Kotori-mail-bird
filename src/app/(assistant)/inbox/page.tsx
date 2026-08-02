@@ -1,4 +1,5 @@
 import Link from "next/link";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { fetchAuthQuery } from "@/lib/auth-server";
 import { convexApi } from "@/lib/convex-api";
 import {
@@ -28,7 +29,7 @@ export default async function InboxPage({
           <p>
             {
               threads.filter(
-                (t) => t.classification?.category === "ACTION_REQUIRED",
+                (t: any) => t.classification?.category === "ACTION_REQUIRED",
               ).length
             }{" "}
             messages need your attention
@@ -69,7 +70,7 @@ export default async function InboxPage({
         </div>
         <div className="thread-list">
           {threads.length ? (
-            threads.map((t) => {
+            threads.map((t: any) => {
               const sender = t.messages[0]?.fromAddress ?? "Unknown sender";
               return (
                 <article className="thread-card" key={t.id}>

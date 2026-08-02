@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import Link from "next/link";
 import { fetchAuthQuery } from "@/lib/auth-server";
 import { convexApi } from "@/lib/convex-api";
@@ -52,7 +53,7 @@ export default async function ThreadPage({
         </dl>
       </section>
       <section className="messages" aria-label="Email thread">
-        {thread.messages.map((m) => (
+        {thread.messages.map((m: any) => (
           <article key={m.id}>
             <div>
               <strong>{m.fromAddress}</strong>

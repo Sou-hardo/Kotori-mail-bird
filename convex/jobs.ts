@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import type { DataModel } from "./_generated/dataModel";
 import { generalPool, syncPool } from "./pools";
 import { dto, requirePrincipal } from "./principal";
 
@@ -90,7 +91,9 @@ export const start = internalMutation({
   args: { jobId: v.id("processingJobs") },
   handler: async (ctx, { jobId }) => {
     const job = await ctx.db.get(jobId);
-    if (!job || !["PENDING", "FAILED"].includes(job.status)) return null;
+    // A retry re-enters this action with the same durable Workpool item.
+    if (!job || !["PENDING", "FAILED", "RUNNING"].includes(job.status))
+      return null;
     await ctx.db.patch(jobId, {
       status: "RUNNING",
       attempts: job.attempts + 1,
@@ -101,7 +104,7 @@ export const start = internalMutation({
     return { ...job, attempts: job.attempts + 1 };
   },
 });
-export const complete = generalPool.defineOnComplete({
+export const complete = generalPool.defineOnComplete<DataModel>({
   context: v.object({ jobId: v.id("processingJobs") }),
   handler: async (ctx, { context, result }) => {
     const job = await ctx.db.get(context.jobId);

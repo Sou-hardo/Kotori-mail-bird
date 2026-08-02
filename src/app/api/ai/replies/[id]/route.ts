@@ -91,7 +91,7 @@ export async function PATCH(
     requiredReviewFlags: currentFlags,
     to: recipients.to,
     cc: recipients.cc,
-    sourceMessageId: inbound.id,
+    sourceMessageId: (inbound as { id?: string }).id,
     metadata:
       input.action === "reject"
         ? {
