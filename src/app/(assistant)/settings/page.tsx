@@ -1,12 +1,12 @@
-import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
+import { fetchAuthQuery } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 import { IdentityManager } from "@/components/identity-manager";
+import { ReplyPreferenceControl } from "./reply-preference";
 export default async function SettingsPage() {
-  const { userId } = await requireCurrentTenant();
-  const identities = await db.identityProfile.findMany({
-    where: { userId },
-    orderBy: [{ isDefault: "desc" }, { label: "asc" }],
-  });
+  const [identities, replyPreference] = await Promise.all([
+    fetchAuthQuery(convexApi.domain.listIdentities, {}),
+    fetchAuthQuery(convexApi.domain.getReplyPreference, {}),
+  ]);
   return (
     <div className="page-wrap">
       <header className="page-header">
@@ -19,6 +19,11 @@ export default async function SettingsPage() {
           </p>
         </div>
       </header>
+      <ReplyPreferenceControl
+        initialGenerateThreeSuggestions={
+          replyPreference.generateThreeSuggestions
+        }
+      />
       <IdentityManager initial={identities} />
       <section className="settings-note">
         <h2>Privacy & control</h2>

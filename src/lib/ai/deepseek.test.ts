@@ -4,11 +4,11 @@ import { z } from "zod";
 
 beforeEach(() => {
   vi.resetModules();
-  vi.stubEnv("DATABASE_URL", "postgresql://u:p@localhost:5432/x");
-  vi.stubEnv("REDIS_URL", "redis://localhost:6379");
-  vi.stubEnv("AUTH_SECRET", "a-secret-that-is-at-least-32-characters");
-  vi.stubEnv("AUTH_GOOGLE_ID", "x");
-  vi.stubEnv("AUTH_GOOGLE_SECRET", "x");
+  vi.stubEnv("NEXT_PUBLIC_CONVEX_URL", "https://example.convex.cloud");
+  vi.stubEnv("NEXT_PUBLIC_CONVEX_SITE_URL", "https://example.convex.site");
+  vi.stubEnv("BETTER_AUTH_SECRET", "a-secret-that-is-at-least-32-characters");
+  vi.stubEnv("GOOGLE_CLIENT_ID", "x");
+  vi.stubEnv("GOOGLE_CLIENT_SECRET", "x");
   vi.stubEnv("APP_URL", "http://localhost:3000");
   vi.stubEnv("GMAIL_OAUTH_CLIENT_ID", "x");
   vi.stubEnv("GMAIL_OAUTH_CLIENT_SECRET", "x");

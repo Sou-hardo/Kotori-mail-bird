@@ -17,7 +17,7 @@ export async function GET(request: Request) {
   const state = createOAuthState(
     principal.tenantId,
     principal.userId,
-    env.AUTH_SECRET,
+    env.BETTER_AUTH_SECRET,
   );
   const pkce = createPkce();
   const jar = await cookies();

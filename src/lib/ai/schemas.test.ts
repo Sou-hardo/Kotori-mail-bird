@@ -3,6 +3,9 @@ import {
   AI_SCHEMA_VERSION,
   analysisSchema,
   replyOutputSchema,
+  replyOutputSchemaFor,
+  replyPreferenceSchema,
+  replyRequestSchema,
 } from "./schemas";
 
 const analysis = {
@@ -32,7 +35,7 @@ describe("versioned AI schemas", () => {
     ).toThrow();
   });
 
-  it("requires exactly three distinct drafts", () => {
+  it("accepts one draft or exactly three distinct drafts", () => {
     expect(
       replyOutputSchema.safeParse({
         schemaVersion: AI_SCHEMA_VERSION,
@@ -52,6 +55,12 @@ describe("versioned AI schemas", () => {
     expect(
       replyOutputSchema.safeParse({
         schemaVersion: AI_SCHEMA_VERSION,
+        drafts: [{ label: "Guided", body: "Thanks, Tuesday works." }],
+      }).success,
+    ).toBe(true);
+    expect(
+      replyOutputSchema.safeParse({
+        schemaVersion: AI_SCHEMA_VERSION,
         drafts: Array.from({ length: 3 }, () => ({
           label: "Same",
           body: "Identical response",
@@ -61,8 +70,41 @@ describe("versioned AI schemas", () => {
     expect(
       replyOutputSchema.safeParse({
         schemaVersion: AI_SCHEMA_VERSION,
+        drafts: [
+          { label: "One", body: "First response" },
+          { label: "Two", body: "Second response" },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      replyOutputSchemaFor(3).safeParse({
+        schemaVersion: AI_SCHEMA_VERSION,
         drafts: [{ label: "Only", body: "One" }],
       }).success,
+    ).toBe(false);
+  });
+
+  it("keeps suggestion count out of reply requests", () => {
+    const request = {
+      threadId: "cm0000000000000000000001",
+      identityId: "cm0000000000000000000002",
+      intent: "Confirm receipt",
+      tone: "Professional",
+      length: "short",
+      acknowledgements: [],
+    };
+    expect(replyRequestSchema.safeParse(request).success).toBe(true);
+    expect(replyRequestSchema.safeParse({ ...request, count: 3 }).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts only the explicit reply preference shape", () => {
+    expect(
+      replyPreferenceSchema.parse({ generateThreeSuggestions: false }),
+    ).toEqual({ generateThreeSuggestions: false });
+    expect(
+      replyPreferenceSchema.safeParse({ generateThreeSuggestions: 3 }).success,
     ).toBe(false);
   });
 });

@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
-import { enqueueSync } from "@/lib/jobs/queues";
+import { fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 
 export async function POST(request: Request) {
   const { connectionId, full = false } = (await request.json()) as {
@@ -13,11 +12,12 @@ export async function POST(request: Request) {
       { error: "connectionId required" },
       { status: 400 },
     );
-  const connection = await db.gmailConnection.findUniqueOrThrow({
-    where: { id: connectionId },
+  const bucket = full ? "initial" : String(Math.floor(Date.now() / 300_000));
+  const job = await fetchAuthMutation(convexApi.jobs.enqueue, {
+    kind: "gmail.sync",
+    input: { connectionId, forceFull: full },
+    dedupeKey: `${connectionId}:${bucket}`,
   });
-  await requireCurrentTenant(connection.tenantId);
-  const job = await enqueueSync(connection, full);
   return NextResponse.json(
     { jobId: job.id, status: job.status },
     { status: 202 },
@@ -31,28 +31,7 @@ export async function GET(request: Request) {
       { error: "connectionId required" },
       { status: 400 },
     );
-  const connection = await db.gmailConnection.findUniqueOrThrow({
-    where: { id: connectionId },
-    include: { syncState: true },
-  });
-  await requireCurrentTenant(connection.tenantId);
-  const latestJobs = await db.processingJob.findMany({
-    where: {
-      tenantId: connection.tenantId,
-      kind: "gmail.sync",
-      input: { path: ["connectionId"], equals: connection.id },
-    },
-    orderBy: { createdAt: "desc" },
-    take: 10,
-  });
-  return NextResponse.json({
-    connection: {
-      id: connection.id,
-      emailAddress: connection.emailAddress,
-      status: connection.status,
-      lastError: connection.lastError,
-    },
-    sync: connection.syncState,
-    jobs: latestJobs,
-  });
+  return NextResponse.json(
+    await fetchAuthQuery(convexApi.jobs.status, { connectionId }),
+  );
 }

@@ -1,13 +1,9 @@
-import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
+import { fetchAuthQuery } from "@/lib/auth-server";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { convexApi } from "@/lib/convex-api";
 import { PushControl } from "@/components/push-control";
 export default async function NotificationsPage() {
-  const { userId } = await requireCurrentTenant();
-  const notes = await db.notification.findMany({
-    where: { userId },
-    orderBy: { createdAt: "desc" },
-    take: 50,
-  });
+  const notes = await fetchAuthQuery(convexApi.domain.listNotifications, {});
   return (
     <div className="page-wrap">
       <header className="page-header">
@@ -22,7 +18,7 @@ export default async function NotificationsPage() {
       </header>
       <div className="thread-list">
         {notes.length ? (
-          notes.map((n) => (
+          notes.map((n: any) => (
             <article
               className={`notification ${n.readAt ? "read" : ""}`}
               key={n.id}
@@ -32,7 +28,7 @@ export default async function NotificationsPage() {
                 <small>{n.kind.replaceAll("_", " ")}</small>
                 <h2>{n.title}</h2>
                 <p>{n.body}</p>
-                <time>{n.createdAt.toLocaleString()}</time>
+                <time>{new Date(n.createdAt).toLocaleString()}</time>
               </div>
             </article>
           ))

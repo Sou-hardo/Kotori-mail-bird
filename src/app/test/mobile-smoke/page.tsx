@@ -1,8 +1,14 @@
 import { notFound } from "next/navigation";
 import { ReplyComposer } from "@/components/reply-composer";
+import { ReplyPreferenceControl } from "@/app/(assistant)/settings/reply-preference";
 
-export default function MobileSmokePage() {
+export default async function MobileSmokePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ three?: string }>;
+}) {
   if (process.env.PLAYWRIGHT_TEST_MODE !== "1") notFound();
+  const generateThreeSuggestions = (await searchParams).three === "1";
   return (
     <main id="main-content" className="page-wrap detail">
       <header className="detail-header">
@@ -12,6 +18,7 @@ export default function MobileSmokePage() {
       </header>
       <ReplyComposer
         threadId="cm0000000000000000000001"
+        generateThreeSuggestions={generateThreeSuggestions}
         identities={[
           {
             id: "cm0000000000000000000002",
@@ -30,6 +37,9 @@ export default function MobileSmokePage() {
             },
           ],
         }}
+      />
+      <ReplyPreferenceControl
+        initialGenerateThreeSuggestions={generateThreeSuggestions}
       />
     </main>
   );

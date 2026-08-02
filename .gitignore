@@ -10,5 +10,6 @@ test-results/
 *.tsbuildinfo
 .DS_Store
 dist/
+.convex/
 src/generated/prisma/
 tmp/

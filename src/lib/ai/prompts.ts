@@ -1,6 +1,7 @@
 import {
   AI_SCHEMA_VERSION,
   type ReplyRequest,
+  type ReplySuggestionCount,
   type ThreadAnalysisResult,
 } from "@/lib/ai/schemas";
 import { sanitizeAiText } from "@/lib/ai/sanitize";
@@ -55,6 +56,7 @@ export function replyPrompt(
     closing: string;
     signature: string;
   },
+  suggestionCount: ReplySuggestionCount = 1,
 ) {
   const preferences = {
     intent: sanitizeAiText(request.intent, 200),
@@ -64,8 +66,9 @@ export function replyPrompt(
     closing: sanitizeAiText(request.closing, 200),
     signature: sanitizeAiText(request.signature, 2_000),
   };
+  const quantity = suggestionCount === 3 ? "three" : "one";
   return {
-    system: `${SYSTEM_GUARD}\nWrite exactly three meaningfully different reply drafts. Every draft must honor the selected intent, tone, length, sender identity, and closing. Never promise, agree to legal/financial terms, disclose sensitive data, or claim an attachment unless explicitly requested by the preferences. Required keys: schemaVersion and drafts; each draft has label and body.`,
+    system: `${SYSTEM_GUARD}\nWrite exactly ${quantity} editable reply draft${suggestionCount === 3 ? "s" : ""}.${suggestionCount === 3 ? " The drafts must be meaningfully different." : ""} Every draft must honor the selected intent, tone, length, sender identity, and closing. Never promise, agree to legal/financial terms, disclose sensitive data, or claim an attachment unless explicitly requested by the preferences. Required keys: schemaVersion and drafts; each draft has label and body.`,
     user: `PREFERENCES (trusted): ${JSON.stringify(preferences)}\nANALYSIS (validated): ${JSON.stringify(analysis)}\n${threadData(thread)}`,
   };
 }

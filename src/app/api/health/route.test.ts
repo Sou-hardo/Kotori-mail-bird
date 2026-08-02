@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-vi.mock("@/lib/db", () => ({ db: { $queryRaw: vi.fn() } }));
-import { readinessResponse } from "./route";
+import { readinessResponse } from "@/lib/health-readiness";
 
 describe("GET /api/health", () => {
   it("reports readiness without caching", async () => {
@@ -10,7 +9,7 @@ describe("GET /api/health", () => {
     await expect(response.json()).resolves.toEqual({ status: "ready" });
   });
 
-  it("returns 503 while the database is unavailable", async () => {
+  it("returns 503 while Convex is unavailable", async () => {
     const response = await readinessResponse(() =>
       Promise.reject(new Error("offline")),
     );
