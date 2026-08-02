@@ -66,6 +66,22 @@ export const failSync = internalMutation({
       });
   },
 });
+export const syncProgress = internalMutation({
+  args: {
+    connectionId: v.id("gmailConnections"),
+    pageToken: v.optional(v.string()),
+  },
+  handler: async (ctx, { connectionId, pageToken }) => {
+    const state = await ctx.db
+      .query("syncStates")
+      .withIndex("by_connection", (q) =>
+        q.eq("gmailConnectionId", connectionId),
+      )
+      .unique();
+    if (state)
+      await ctx.db.patch(state._id, { pageToken, updatedAt: Date.now() });
+  },
+});
 const header = (headers: any[], name: string) =>
   headers?.find((x) => String(x.name).toLowerCase() === name.toLowerCase())
     ?.value;
@@ -224,6 +240,7 @@ export const finishSync = internalMutation({
       await ctx.db.patch(s._id, {
         status: "IDLE",
         historyId: a.historyId,
+        pageToken: undefined,
         lastCompletedAt: Date.now(),
         updatedAt: Date.now(),
       });

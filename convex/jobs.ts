@@ -187,9 +187,12 @@ export const complete = generalPool.defineOnComplete<
 });
 
 export const pollActiveConnections = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    for (const c of await ctx.db.query("gmailConnections").collect()) {
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, { cursor }) => {
+    const page = await ctx.db
+      .query("gmailConnections")
+      .paginate({ cursor: cursor ?? null, numItems: 50 });
+    for (const c of page.page) {
       if (c.status !== "ACTIVE") continue;
       const bucket = Math.floor(Date.now() / 300000);
       await createJob(
@@ -200,82 +203,121 @@ export const pollActiveConnections = internalMutation({
         `${c._id}:${bucket}`,
       );
     }
+    if (!page.isDone)
+      await ctx.scheduler.runAfter(0, internal.jobs.pollActiveConnections, {
+        cursor: page.continueCursor,
+      });
   },
 });
 export const retentionBatch = internalMutation({
-  args: { cursor: v.optional(v.string()) },
-  handler: async (ctx, { cursor }) => {
+  args: {
+    cursor: v.optional(v.string()),
+    threadId: v.optional(v.id("emailThreads")),
+  },
+  handler: async (ctx, { cursor, threadId }) => {
     const cutoff = Date.now() - 90 * 86400000;
-    const page = await ctx.db
-      .query("emailThreads")
-      .paginate({ cursor: cursor ?? null, numItems: 50 });
-    for (const t of page.page)
-      if (t.latestMessageAt < cutoff) {
-        for (const row of await ctx.db
+    const page = threadId
+      ? null
+      : await ctx.db
+          .query("emailThreads")
+          .paginate({ cursor: cursor ?? null, numItems: 1 });
+    const thread = threadId ? await ctx.db.get(threadId) : page?.page[0];
+    let deleted = 0;
+    if (thread && thread.latestMessageAt < cutoff) {
+      const reschedule = async () =>
+        ctx.scheduler.runAfter(0, internal.jobs.retentionBatch, {
+          cursor,
+          threadId: thread._id,
+        });
+      const simpleChildren = [
+        await ctx.db
           .query("classifications")
-          .withIndex("by_thread", (q) => q.eq("threadId", t._id))
-          .collect())
-          await ctx.db.delete(row._id);
-        for (const row of await ctx.db
+          .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+          .take(100),
+        await ctx.db
           .query("threadSummaries")
-          .withIndex("by_thread", (q) => q.eq("threadId", t._id))
-          .collect())
-          await ctx.db.delete(row._id);
-        for (const row of await ctx.db
+          .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+          .take(100),
+        await ctx.db
           .query("threadAnalyses")
-          .withIndex("by_thread_created", (q) => q.eq("threadId", t._id))
-          .collect())
-          await ctx.db.delete(row._id);
-        for (const row of await ctx.db
+          .withIndex("by_thread_created", (q) => q.eq("threadId", thread._id))
+          .take(100),
+        await ctx.db
           .query("gmailDrafts")
-          .withIndex("by_thread_status", (q) => q.eq("threadId", t._id))
-          .collect())
-          await ctx.db.delete(row._id);
-        for (const row of await ctx.db
-          .query("followUpReminders")
-          .withIndex("by_thread", (q) => q.eq("threadId", t._id))
-          .collect()) {
+          .withIndex("by_thread_status", (q) => q.eq("threadId", thread._id))
+          .take(100),
+        await ctx.db
+          .query("notifications")
+          .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+          .take(100),
+      ];
+      const firstChildren = simpleChildren.find((rows) => rows.length);
+      if (firstChildren) {
+        for (const row of firstChildren) await ctx.db.delete(row._id);
+        await reschedule();
+        return { deleted };
+      }
+      const reminders = await ctx.db
+        .query("followUpReminders")
+        .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+        .take(50);
+      if (reminders.length) {
+        for (const row of reminders) {
           if (row.scheduledWorkId)
             await generalPool.cancel(ctx, row.scheduledWorkId as any);
           await ctx.db.delete(row._id);
         }
-        for (const row of await ctx.db
-          .query("notifications")
-          .withIndex("by_thread", (q) => q.eq("threadId", t._id))
-          .collect())
-          await ctx.db.delete(row._id);
-        for (const generation of await ctx.db
-          .query("replyGenerations")
-          .withIndex("by_thread_created", (q) => q.eq("threadId", t._id))
-          .collect()) {
-          for (const option of await ctx.db
-            .query("replyOptions")
-            .withIndex("by_generation_rank", (q) =>
-              q.eq("generationId", generation._id),
-            )
-            .collect())
-            await ctx.db.delete(option._id);
-          await ctx.db.delete(generation._id);
-        }
-        for (const option of await ctx.db
-          .query("replyOptions")
-          .withIndex("by_thread", (q) => q.eq("threadId", t._id))
-          .collect())
-          await ctx.db.delete(option._id);
-        for (const m of await ctx.db
-          .query("emailMessages")
-          .withIndex("by_thread_sent", (q) => q.eq("threadId", t._id))
-          .collect()) {
-          for (const a of await ctx.db
-            .query("attachments")
-            .withIndex("by_message_gmail", (q) => q.eq("messageId", m._id))
-            .collect())
-            await ctx.db.delete(a._id);
-          await ctx.db.delete(m._id);
-        }
-        await ctx.db.delete(t._id);
+        await reschedule();
+        return { deleted };
       }
-    for (const job of await ctx.db.query("processingJobs").collect())
+      const options = await ctx.db
+        .query("replyOptions")
+        .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+        .take(100);
+      if (options.length) {
+        for (const row of options) await ctx.db.delete(row._id);
+        await reschedule();
+        return { deleted };
+      }
+      const generations = await ctx.db
+        .query("replyGenerations")
+        .withIndex("by_thread_created", (q) => q.eq("threadId", thread._id))
+        .take(100);
+      if (generations.length) {
+        for (const row of generations) await ctx.db.delete(row._id);
+        await reschedule();
+        return { deleted };
+      }
+      const messages = await ctx.db
+        .query("emailMessages")
+        .withIndex("by_thread_sent", (q) => q.eq("threadId", thread._id))
+        .take(25);
+      if (messages.length) {
+        for (const message of messages) {
+          const attachments = await ctx.db
+            .query("attachments")
+            .withIndex("by_message_gmail", (q) =>
+              q.eq("messageId", message._id),
+            )
+            .take(100);
+          for (const attachment of attachments)
+            await ctx.db.delete(attachment._id);
+          if (attachments.length < 100) await ctx.db.delete(message._id);
+        }
+        await reschedule();
+        return { deleted };
+      }
+      await ctx.db.delete(thread._id);
+      deleted = 1;
+      if (threadId)
+        await ctx.scheduler.runAfter(0, internal.jobs.retentionBatch, {
+          cursor,
+        });
+    }
+    for (const job of await ctx.db
+      .query("processingJobs")
+      .withIndex("by_completed", (q) => q.lt("completedAt", cutoff))
+      .take(100))
       if (
         ["SUCCEEDED", "CANCELLED"].includes(job.status) &&
         (job.completedAt ?? Infinity) < cutoff
@@ -287,13 +329,11 @@ export const retentionBatch = internalMutation({
       .withIndex("by_created", (q) => q.lt("createdAt", auditCutoff))
       .take(100))
       await ctx.db.delete(audit._id);
-    if (!page.isDone)
+    if (page && !page.isDone)
       await ctx.scheduler.runAfter(0, internal.jobs.retentionBatch, {
         cursor: page.continueCursor,
       });
-    return {
-      deleted: page.page.filter((t) => t.latestMessageAt < cutoff).length,
-    };
+    return { deleted };
   },
 });
 export const status = query({
