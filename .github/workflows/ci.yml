@@ -12,11 +12,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      DATABASE_URL: postgresql://kotori:kotori@localhost:5432/kotori?schema=public
-      REDIS_URL: redis://localhost:6379
-      AUTH_SECRET: ci-only-auth-secret-at-least-32-characters
-      AUTH_GOOGLE_ID: ci-google-id
-      AUTH_GOOGLE_SECRET: ci-google-secret
+      NEXT_PUBLIC_CONVEX_URL: https://example.convex.cloud
+      NEXT_PUBLIC_CONVEX_SITE_URL: https://example.convex.site
+      BETTER_AUTH_SECRET: ci-only-auth-secret-at-least-32-characters
+      GOOGLE_CLIENT_ID: ci-google-id
+      GOOGLE_CLIENT_SECRET: ci-google-secret
       APP_URL: http://localhost:3000
       GMAIL_OAUTH_CLIENT_ID: ci-gmail-id
       GMAIL_OAUTH_CLIENT_SECRET: ci-gmail-secret
@@ -41,6 +41,4 @@ jobs:
       - run: pnpm test:no-send
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
-      - run: pnpm db:validate
-      - run: pnpm db:generate
       - run: pnpm build
