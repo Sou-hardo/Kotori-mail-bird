@@ -21,7 +21,7 @@ export const authComponent = createClient<DataModel>(components.betterAuth, {
           authUserId: authUser._id,
           name: authUser.name,
           email: authUser.email,
-          image: authUser.image,
+          image: authUser.image ?? undefined,
           createdAt: now,
           updatedAt: now,
         });

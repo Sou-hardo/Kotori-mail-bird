@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { readinessResponse } from "./route";
+import { readinessResponse } from "@/lib/health-readiness";
 
 describe("GET /api/health", () => {
   it("reports readiness without caching", async () => {

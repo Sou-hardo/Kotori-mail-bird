@@ -1,4 +1,5 @@
 import { anyApi } from "convex/server";
-export const api = anyApi;
-export const internal = anyApi;
-export const components = anyApi;
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export const api: Record<string, any> = anyApi;
+export const internal: Record<string, any> = anyApi;
+export const components: Record<string, any> = anyApi;

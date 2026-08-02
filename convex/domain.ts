@@ -228,7 +228,9 @@ export const listDrafts = query({
         out.push({ ...dto(draft), thread: dto(thread) });
     }
     return out.sort((a, b) =>
-      String(b.updatedAt).localeCompare(String(a.updatedAt)),
+      String((b as Record<string, unknown>).updatedAt).localeCompare(
+        String((a as Record<string, unknown>).updatedAt),
+      ),
     );
   },
 });

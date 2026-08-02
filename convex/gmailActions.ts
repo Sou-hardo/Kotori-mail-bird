@@ -53,7 +53,6 @@ export const sync = internalAction({
     }
     await ctx.runMutation(internal.gmailData.finishSync, {
       connectionId: args.connectionId,
-      historyId: listing.data.historyId ?? undefined,
     });
     return { threads: saved };
   },
