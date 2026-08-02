@@ -1,9 +1,18 @@
 "use node";
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
-async function deepseek(prompt: string) {
+import type { Doc } from "./_generated/dataModel";
+
+type ReplyContext = {
+  thread: Doc<"emailThreads">;
+  messages: Array<Doc<"emailMessages">>;
+  identity: Doc<"identityProfiles">;
+};
+
+type ReplyOption = { tone: string; body: string };
+
+async function deepseek(prompt: string): Promise<unknown> {
   const r = await fetch(
     `${process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com"}/chat/completions`,
     {
@@ -27,16 +36,42 @@ async function deepseek(prompt: string) {
     },
   );
   if (!r.ok) throw new Error(`DeepSeek ${r.status}`);
-  const j = (await r.json()) as any;
-  return JSON.parse(j.choices?.[0]?.message?.content ?? "{}");
+  const response = (await r.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  return JSON.parse(response.choices?.[0]?.message?.content ?? "{}") as unknown;
 }
+
+const replyOptions = (result: unknown, expectedCount: 1 | 3) => {
+  if (!result || typeof result !== "object" || !("options" in result))
+    throw new Error("invalid_reply_output");
+  const options = (result as { options?: unknown }).options;
+  if (!Array.isArray(options) || options.length !== expectedCount)
+    throw new Error(`invalid_reply_option_count:${expectedCount}`);
+  return options.map((option): ReplyOption => {
+    if (!option || typeof option !== "object")
+      throw new Error("invalid_reply_output");
+    const tone = (option as { tone?: unknown }).tone;
+    const body = (option as { body?: unknown }).body;
+    if (typeof body !== "string" || body.trim().length === 0)
+      throw new Error("invalid_reply_output");
+    return {
+      tone: typeof tone === "string" ? tone : "",
+      body: body
+        .replace(/<[^>]*>/g, "")
+        .trim()
+        .slice(0, 20_000),
+    };
+  });
+};
+
 export const analyze = internalAction({
   args: {
     jobId: v.id("processingJobs"),
     threadId: v.id("emailThreads"),
     version: v.optional(v.string()),
   },
-  handler: async (ctx, a) => {
+  handler: async (ctx, a): Promise<unknown> => {
     const input = await ctx.runQuery(internal.aiData.threadContext, {
       threadId: a.threadId,
     });
@@ -55,23 +90,34 @@ export const generateReplies = internalAction({
   args: {
     jobId: v.id("processingJobs"),
     threadId: v.id("emailThreads"),
-    actorId: v.string(),
-    identityId: v.string(),
+    actorId: v.id("users"),
+    identityId: v.id("identityProfiles"),
     intent: v.string(),
     tone: v.string(),
     length: v.string(),
     acknowledgements: v.array(v.string()),
+    suggestionCount: v.union(v.literal(1), v.literal(3)),
   },
-  handler: async (ctx, a) => {
-    const input = await ctx.runQuery(internal.aiData.replyContext, {
-      threadId: a.threadId,
-      identityId: a.identityId as any,
-    });
-    if (!input) throw new Error("reply_context_not_found");
-    const result = await deepseek(
-      `Generate exactly three editable reply options as JSON {options:[{tone,body}]}. Never claim to send mail.\nIntent:${a.intent}\nTone:${a.tone}\nLength:${a.length}\n${JSON.stringify(input).slice(0, 60000)}`,
+  handler: async (ctx, a): Promise<{ count: 1 | 3; generationId: string }> => {
+    const input: ReplyContext | null = await ctx.runQuery(
+      internal.aiData.replyContext,
+      {
+        threadId: a.threadId,
+        identityId: a.identityId,
+        actorId: a.actorId,
+      },
     );
-    await ctx.runMutation(internal.aiData.saveReplies, { ...a, result });
-    return { count: result.options?.length ?? 0 };
+    if (!input) throw new Error("reply_context_not_found");
+    const expectedCount = a.suggestionCount;
+    const countWord = expectedCount === 3 ? "three" : "one";
+    const rawResult = await deepseek(
+      `Generate exactly ${countWord} editable reply ${expectedCount === 3 ? "options" : "option"} as JSON {options:[{tone,body}]}. Never claim to send mail.\nIntent:${a.intent}\nTone:${a.tone}\nLength:${a.length}\n${JSON.stringify(input).slice(0, 60000)}`,
+    );
+    const result = { options: replyOptions(rawResult, expectedCount) };
+    const generationId = await ctx.runMutation(internal.aiData.saveReplies, {
+      ...a,
+      result,
+    });
+    return { count: expectedCount, generationId };
   },
 });

@@ -71,6 +71,7 @@ export default defineSchema({
     name: v.optional(v.string()),
     email: v.optional(v.string()),
     image: v.optional(v.string()),
+    generateThreeSuggestions: v.optional(v.boolean()),
     ...timestamps,
   })
     .index("by_auth_user", ["authUserId"])
@@ -78,8 +79,11 @@ export default defineSchema({
   tenants: defineTable({
     slug: v.string(),
     name: v.string(),
+    ownerAuthUserId: v.optional(v.string()),
     ...timestamps,
-  }).index("by_slug", ["slug"]),
+  })
+    .index("by_slug", ["slug"])
+    .index("by_owner_auth_user", ["ownerAuthUserId"]),
   memberships: defineTable({
     tenantId: v.id("tenants"),
     userId: v.id("users"),
