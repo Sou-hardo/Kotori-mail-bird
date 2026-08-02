@@ -5,24 +5,20 @@ import {
   ReviewRequiredError,
   assertReviewAcknowledged,
 } from "@/lib/ai/safety";
-import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
-import { enqueueReplyGeneration } from "@/lib/jobs/queues";
+import { fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 import { latestInbound, replyAllRecipients } from "@/lib/gmail/recipients";
 
 export async function POST(request: Request) {
   const input = replyRequestSchema.parse(await request.json());
-  const thread = await db.emailThread.findUniqueOrThrow({
-    where: { id: input.threadId },
-    include: {
-      gmailConnection: true,
-      messages: { orderBy: { sentAt: "asc" }, include: { attachments: true } },
-    },
+  const thread = await fetchAuthQuery(convexApi.domain.getThread, {
+    id: input.threadId,
   });
-  const principal = await requireCurrentTenant(thread.tenantId);
-  const identity = await db.identityProfile.findFirst({
-    where: { id: input.identityId, userId: principal.userId },
-  });
+  if (!thread)
+    return NextResponse.json({ error: "thread_not_found" }, { status: 404 });
+  const identity = thread.identities.find(
+    (x: { id: string }) => x.id === input.identityId,
+  );
   if (!identity)
     return NextResponse.json({ error: "identity_not_found" }, { status: 403 });
   const inbound = latestInbound(
@@ -50,11 +46,12 @@ export async function POST(request: Request) {
       );
     throw error;
   }
-  const job = await enqueueReplyGeneration(
-    thread.tenantId,
-    input,
-    principal.userId,
-  );
+  const principal = await fetchAuthQuery(convexApi.domain.currentPrincipal, {});
+  const job = await fetchAuthMutation(convexApi.jobs.enqueue, {
+    kind: "ai.reply.generate",
+    input: { ...input, actorId: principal.userId },
+    dedupeKey: `${input.threadId}:${crypto.randomUUID()}`,
+  });
   return NextResponse.json(
     { jobId: job.id, status: job.status, requiredReviewFlags: flags },
     { status: 202 },

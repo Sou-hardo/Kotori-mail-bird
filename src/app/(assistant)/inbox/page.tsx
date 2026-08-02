@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
+import { fetchAuthQuery } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 import {
   confidenceLabel,
   initials,
@@ -14,41 +14,10 @@ export default async function InboxPage({
 }: {
   searchParams: Promise<{ q?: string; filter?: string }>;
 }) {
-  const { tenantId } = await requireCurrentTenant();
   const { q, filter } = await searchParams;
-  const threads = await db.emailThread.findMany({
-    where: {
-      tenantId,
-      labelIds: { has: "INBOX" },
-      ...(q
-        ? {
-            OR: [
-              { subject: { contains: q, mode: "insensitive" } },
-              { snippet: { contains: q, mode: "insensitive" } },
-              {
-                messages: {
-                  some: {
-                    OR: [
-                      { fromAddress: { contains: q, mode: "insensitive" } },
-                      { bodyText: { contains: q, mode: "insensitive" } },
-                    ],
-                  },
-                },
-              },
-            ],
-          }
-        : {}),
-      ...(filter === "unread" ? { isUnread: true } : {}),
-      ...(filter === "attention"
-        ? { classification: { category: "ACTION_REQUIRED" } }
-        : {}),
-    },
-    include: {
-      classification: true,
-      summary: true,
-      messages: { orderBy: { sentAt: "desc" }, take: 1 },
-    },
-    orderBy: { latestMessageAt: "desc" },
+  const threads = await fetchAuthQuery(convexApi.domain.listInbox, {
+    q,
+    filter,
   });
   return (
     <div className="page-wrap">
@@ -109,7 +78,7 @@ export default async function InboxPage({
                     <div className="thread-main">
                       <div className="thread-top">
                         <strong>{sender.split("<")[0]}</strong>
-                        <time>{relativeTime(t.latestMessageAt)}</time>
+                        <time>{relativeTime(new Date(t.latestMessageAt))}</time>
                       </div>
                       <h3>{t.subject ?? "(No subject)"}</h3>
                       <p>{t.summary?.summary ?? t.snippet}</p>

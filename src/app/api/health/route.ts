@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { ConvexHttpClient } from "convex/browser";
+import { convexApi } from "@/lib/convex-api";
 
 export const dynamic = "force-dynamic";
 
@@ -19,5 +20,10 @@ export async function readinessResponse(check: () => Promise<unknown>) {
 }
 
 export function GET() {
-  return readinessResponse(() => db.$queryRaw`SELECT 1`);
+  return readinessResponse(() =>
+    new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!).query(
+      convexApi.health.ready,
+      {},
+    ),
+  );
 }

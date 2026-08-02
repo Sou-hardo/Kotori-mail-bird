@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
+import { fetchAuthQuery } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 import { ReplyComposer } from "@/components/reply-composer";
 
 export default async function ThreadPage({
@@ -9,27 +9,10 @@ export default async function ThreadPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const { tenantId, userId } = await requireCurrentTenant();
   const { id } = await params;
-  const thread = await db.emailThread.findFirst({
-    where: { id, tenantId },
-    include: {
-      messages: { orderBy: { sentAt: "asc" } },
-      summary: true,
-      classification: true,
-      replyGenerations: {
-        include: { options: { orderBy: { rank: "asc" } } },
-        orderBy: { createdAt: "desc" },
-        take: 1,
-      },
-    },
-  });
+  const thread = await fetchAuthQuery(convexApi.domain.getThread, { id });
   if (!thread) notFound();
-  const identities = await db.identityProfile.findMany({
-    where: { userId },
-    select: { id: true, label: true, closing: true, isDefault: true },
-    orderBy: [{ isDefault: "desc" }, { label: "asc" }],
-  });
+  const identities = thread.identities;
   return (
     <div className="page-wrap detail">
       <Link className="back" href="/inbox">
@@ -43,7 +26,7 @@ export default async function ThreadPage({
         <p>
           {thread.messages.length} message
           {thread.messages.length === 1 ? "" : "s"} · Last activity{" "}
-          {thread.latestMessageAt.toLocaleDateString()}
+          {new Date(thread.latestMessageAt).toLocaleDateString()}
         </p>
       </header>
       <section className="summary-card">
@@ -73,7 +56,7 @@ export default async function ThreadPage({
           <article key={m.id}>
             <div>
               <strong>{m.fromAddress}</strong>
-              <time>{m.sentAt.toLocaleString()}</time>
+              <time>{new Date(m.sentAt).toLocaleString()}</time>
             </div>
             <p>{m.bodyText ?? m.snippet}</p>
           </article>

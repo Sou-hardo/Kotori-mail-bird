@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
+import { fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 export const identitySchema = z.object({
   label: z.string().min(1),
   displayName: z.string().min(1),
@@ -16,24 +16,14 @@ export const identitySchema = z.object({
   isDefault: z.boolean().default(false),
 });
 export async function GET() {
-  const { userId } = await requireCurrentTenant();
   return NextResponse.json(
-    await db.identityProfile.findMany({
-      where: { userId },
-      orderBy: { label: "asc" },
-    }),
+    await fetchAuthQuery(convexApi.domain.listIdentities, {}),
   );
 }
 export async function POST(r: Request) {
-  const { userId } = await requireCurrentTenant();
   const input = identitySchema.parse(await r.json());
-  const item = await db.$transaction(async (tx) => {
-    if (input.isDefault)
-      await tx.identityProfile.updateMany({
-        where: { userId },
-        data: { isDefault: false },
-      });
-    return tx.identityProfile.create({ data: { ...input, userId } });
+  const item = await fetchAuthMutation(convexApi.domain.saveIdentity, {
+    input,
   });
   return NextResponse.json(item, { status: 201 });
 }
