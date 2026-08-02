@@ -1,10 +1,11 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { REVIEW_FLAGS, detectReviewFlags } from "@/lib/ai/safety";
 import { sanitizeAiText } from "@/lib/ai/sanitize";
-import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
+import { fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 import { latestInbound, replyAllRecipients } from "@/lib/gmail/recipients";
 
 const hash = (value: string) =>
@@ -34,22 +35,25 @@ export async function PATCH(
 ) {
   const { id } = await context.params;
   const input = actionSchema.parse(await request.json());
-  const option = await db.replyOption.findUniqueOrThrow({
-    where: { id },
-    include: {
-      thread: {
-        include: {
-          gmailConnection: true,
-          messages: {
-            orderBy: { sentAt: "asc" },
-            include: { attachments: true },
-          },
-        },
-      },
-      generation: true,
-    },
-  });
-  const principal = await requireCurrentTenant(option.thread.tenantId);
+  const inbox = await fetchAuthQuery(convexApi.domain.listInbox, {});
+  let option: any, thread: any;
+  for (const candidate of inbox) {
+    const full = await fetchAuthQuery(convexApi.domain.getThread, {
+      id: candidate.id,
+    });
+    const found = full?.replyGenerations?.[0]?.options?.find(
+      (x: any) => x.id === id,
+    );
+    if (found) {
+      option = found;
+      thread = full;
+      break;
+    }
+  }
+  if (!option)
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  option.thread = thread;
+  option.generation = thread.replyGenerations?.[0];
   const inbound = latestInbound(
     option.thread.messages,
     option.thread.gmailConnection.emailAddress,
@@ -77,78 +81,45 @@ export async function PATCH(
         { status: 409 },
       );
   }
-  const result = await db.$transaction(async (tx) => {
-    let targetBody = option.body;
-    let targetVersion = option.version;
-    if (input.action === "edit")
-      ({ body: targetBody, version: targetVersion } =
-        await tx.replyOption.update({
-          where: { id },
-          data: { body: sanitizeAiText(input.body), version: { increment: 1 } },
-        }));
-    if (input.action === "approve") {
-      await tx.replyGeneration.update({
-        where: { id: option.generationId! },
-        data: {
-          acknowledgedFlags: input.acknowledgements,
-          requiredReviewFlags: currentFlags,
-        },
-      });
-      await tx.gmailDraft.create({
-        data: {
-          threadId: option.threadId,
-          replyOptionId: option.id,
-          body: option.body,
-          toAddresses: recipients.to,
-          ccAddresses: recipients.cc,
-          sourceMessageId: inbound.id,
-          status: "APPROVED",
-        },
-      });
-    }
-    await tx.auditEvent.create({
-      data: {
-        tenantId: option.thread.tenantId,
-        actorId: principal.userId,
-        action:
-          input.action === "edit"
-            ? "REPLY_EDITED"
-            : input.action === "reject"
-              ? "REPLY_REJECTED"
-              : "REPLY_APPROVED",
-        targetType: "ReplyOption",
-        targetId: id,
-        metadata:
-          input.action === "reject"
-            ? {
-                reason: sanitizeAiText(input.reason, 1_000),
-                version: option.version,
-              }
-            : input.action === "approve"
-              ? {
-                  acknowledgements: input.acknowledgements,
-                  version: option.version,
-                  bodyHash: hash(option.body),
-                  recipients: [...recipients.to, ...recipients.cc],
-                  recipientsHash: hash(JSON.stringify(recipients)),
-                  requiredReviewFlags: currentFlags,
-                }
-              : {
-                  version: targetVersion,
-                  contentChanged: targetBody !== option.body,
-                  beforeBodyHash: hash(option.body),
-                  afterBodyHash: hash(targetBody),
-                  requiredReviewFlags: detectReviewFlags(option.thread, {
-                    body: targetBody,
-                    intent: option.intent,
-                    identity: option.generation?.identity,
-                    closing: option.generation?.closing,
-                    recipients: [...recipients.to, ...recipients.cc],
-                  }),
-                },
-      },
-    });
-    return { id: option.id, body: targetBody, version: targetVersion };
+  const result = await fetchAuthMutation(convexApi.domain.replyAction, {
+    id,
+    action: input.action,
+    body: input.action === "edit" ? sanitizeAiText(input.body) : undefined,
+    reason: input.action === "reject" ? input.reason : undefined,
+    acknowledgements:
+      input.action === "approve" ? input.acknowledgements : undefined,
+    requiredReviewFlags: currentFlags,
+    to: recipients.to,
+    cc: recipients.cc,
+    sourceMessageId: inbound.id,
+    metadata:
+      input.action === "reject"
+        ? {
+            reason: sanitizeAiText(input.reason, 1_000),
+            version: option.version,
+          }
+        : input.action === "approve"
+          ? {
+              acknowledgements: input.acknowledgements,
+              version: option.version,
+              bodyHash: hash(option.body),
+              recipients: [...recipients.to, ...recipients.cc],
+              recipientsHash: hash(JSON.stringify(recipients)),
+              requiredReviewFlags: currentFlags,
+            }
+          : {
+              version: option.version + 1,
+              contentChanged: sanitizeAiText(input.body) !== option.body,
+              beforeBodyHash: hash(option.body),
+              afterBodyHash: hash(sanitizeAiText(input.body)),
+              requiredReviewFlags: detectReviewFlags(option.thread, {
+                body: sanitizeAiText(input.body),
+                intent: option.intent,
+                identity: option.generation?.identity,
+                closing: option.generation?.closing,
+                recipients: [...recipients.to, ...recipients.cc],
+              }),
+            },
   });
   return NextResponse.json({
     id: result.id,

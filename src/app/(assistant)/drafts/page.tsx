@@ -1,14 +1,9 @@
 import Link from "next/link";
-import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
+import { fetchAuthQuery } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 import { DraftAction } from "@/components/draft-action";
 export default async function DraftsPage() {
-  const { tenantId } = await requireCurrentTenant();
-  const drafts = await db.gmailDraft.findMany({
-    where: { thread: { tenantId } },
-    include: { thread: true },
-    orderBy: { updatedAt: "desc" },
-  });
+  const drafts = await fetchAuthQuery(convexApi.domain.listDrafts, {});
   return (
     <div className="page-wrap">
       <header className="page-header">

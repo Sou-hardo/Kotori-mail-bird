@@ -1,19 +1,18 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { analysisSchema } from "@/lib/ai/schemas";
-import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
-import { enqueueAnalysis } from "@/lib/jobs/queues";
+import { fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 
 const requestSchema = z.object({ threadId: z.string().cuid() }).strict();
 
 export async function POST(request: Request) {
   const { threadId } = requestSchema.parse(await request.json());
-  const thread = await db.emailThread.findUniqueOrThrow({
-    where: { id: threadId },
+  const job = await fetchAuthMutation(convexApi.jobs.enqueue, {
+    kind: "ai.thread.analyze",
+    input: { threadId, version: "manual" },
+    dedupeKey: `${threadId}:manual`,
   });
-  await requireCurrentTenant(thread.tenantId);
-  const job = await enqueueAnalysis(thread.tenantId, threadId);
   return NextResponse.json(
     { jobId: job.id, status: job.status },
     { status: 202 },
@@ -24,13 +23,8 @@ export async function GET(request: Request) {
   const threadId = new URL(request.url).searchParams.get("threadId");
   if (!threadId)
     return NextResponse.json({ error: "threadId required" }, { status: 400 });
-  const thread = await db.emailThread.findUniqueOrThrow({
-    where: { id: threadId },
-  });
-  await requireCurrentTenant(thread.tenantId);
-  const row = await db.threadAnalysis.findFirst({
-    where: { threadId },
-    orderBy: { createdAt: "desc" },
+  const row = await fetchAuthQuery(convexApi.domain.latestAnalysis, {
+    threadId,
   });
   if (!row)
     return NextResponse.json({ error: "analysis not found" }, { status: 404 });

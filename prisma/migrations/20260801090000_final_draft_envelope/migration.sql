@@ -1,4 +1,0 @@
-ALTER TABLE "GmailDraft"
-ADD COLUMN "toAddresses" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
-ADD COLUMN "ccAddresses" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
-ADD COLUMN "sourceMessageId" TEXT;

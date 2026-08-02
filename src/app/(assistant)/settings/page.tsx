@@ -1,12 +1,8 @@
-import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
+import { fetchAuthQuery } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 import { IdentityManager } from "@/components/identity-manager";
 export default async function SettingsPage() {
-  const { userId } = await requireCurrentTenant();
-  const identities = await db.identityProfile.findMany({
-    where: { userId },
-    orderBy: [{ isDefault: "desc" }, { label: "asc" }],
-  });
+  const identities = await fetchAuthQuery(convexApi.domain.listIdentities, {});
   return (
     <div className="page-wrap">
       <header className="page-header">
