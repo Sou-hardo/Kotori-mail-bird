@@ -8,8 +8,7 @@ export default async function AssistantLayout({
 }: {
   children: React.ReactNode;
 }) {
-  if (!(await isAuthenticated()))
-    redirect("/api/auth/sign-in/social?provider=google");
+  if (!(await isAuthenticated())) redirect("/sign-in");
   const principal = await fetchAuthQuery(convexApi.domain.currentPrincipal, {});
   return <AppShell user={principal.user}>{children}</AppShell>;
 }
