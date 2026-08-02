@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ServiceWorker } from "@/components/service-worker";
+import { AuthProvider } from "@/components/auth-provider";
+import { getToken } from "@/lib/auth-server";
 
 export const metadata: Metadata = {
   title: "Kotori Mail Bird",
@@ -11,16 +13,17 @@ export const metadata: Metadata = {
   icons: { icon: "/icon.svg", apple: "/icon.svg" },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const initialToken = await getToken();
   return (
     <html lang="en">
       <body>
         <a className="skip-link" href="#main-content">
           Skip to content
         </a>
-        {children}
+        <AuthProvider initialToken={initialToken}>{children}</AuthProvider>
         <ServiceWorker />
       </body>
     </html>
