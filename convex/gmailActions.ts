@@ -70,6 +70,10 @@ export const sync = internalAction({
               if (item.message?.id) deletedMessageIds.add(item.message.id);
           }
           pageToken = response.data.nextPageToken ?? undefined;
+          await ctx.runMutation(internal.gmailData.syncProgress, {
+            connectionId: args.connectionId,
+            pageToken,
+          });
           if (!pageToken) break;
           if (page === 3) throw new Error("gmail_history_page_limit_exceeded");
         }
@@ -116,6 +120,14 @@ export const sync = internalAction({
       });
       return { threads: saved, incremental: useHistory };
     } catch (error) {
+      const code =
+        (error as { code?: number; response?: { status?: number } }).code ??
+        (error as { response?: { status?: number } }).response?.status;
+      if (useHistory && code === 404)
+        return ctx.runAction(internal.gmailActions.sync, {
+          ...args,
+          forceFull: true,
+        });
       await ctx.runMutation(internal.gmailData.failSync, {
         connectionId: args.connectionId,
         error: error instanceof Error ? error.message : String(error),
