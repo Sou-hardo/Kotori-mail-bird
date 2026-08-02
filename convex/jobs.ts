@@ -2,13 +2,51 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
-import type { DataModel } from "./_generated/dataModel";
+import type { Doc, Id, DataModel } from "./_generated/dataModel";
 import { generalPool, syncPool } from "./pools";
 import { dto, requirePrincipal } from "./principal";
 
 const poolFor = (kind: string) =>
   kind === "gmail.sync" ? syncPool : generalPool;
+
+const publicKinds = new Set([
+  "gmail.sync",
+  "gmail.draft.create",
+  "ai.thread.analyze",
+  "ai.reply.generate",
+]);
+
+async function authorizeJobInput(
+  ctx: any,
+  kind: string,
+  input: Record<string, unknown>,
+  tenantId: Id<"tenants">,
+  userId: Id<"users">,
+) {
+  if (!publicKinds.has(kind)) throw new Error("job_kind_not_allowed");
+  if (typeof input.connectionId === "string") {
+    const row = await ctx.db.get(input.connectionId as Id<"gmailConnections">);
+    if (!row || row.tenantId !== tenantId)
+      throw new Error("connection_not_found");
+  }
+  let thread: Doc<"emailThreads"> | null = null;
+  if (typeof input.threadId === "string") {
+    thread = await ctx.db.get(input.threadId as Id<"emailThreads">);
+    if (!thread || thread.tenantId !== tenantId)
+      throw new Error("thread_not_found");
+  }
+  if (typeof input.identityId === "string") {
+    const row = await ctx.db.get(input.identityId as Id<"identityProfiles">);
+    if (!row || row.userId !== userId) throw new Error("identity_not_found");
+  }
+  if (typeof input.draftId === "string") {
+    const draft = await ctx.db.get(input.draftId as Id<"gmailDrafts">);
+    const draftThread = draft ? await ctx.db.get(draft.threadId) : null;
+    if (!draft || !draftThread || draftThread.tenantId !== tenantId)
+      throw new Error("draft_not_found");
+  }
+  if (kind === "ai.reply.generate") input.actorId = String(userId);
+}
 
 async function createJob(
   ctx: any,
@@ -63,17 +101,9 @@ export const enqueue = mutation({
     runAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const { tenantId } = await requirePrincipal(ctx);
+    const { tenantId, userId } = await requirePrincipal(ctx);
     const input = args.input as Record<string, unknown>;
-    if (typeof input.connectionId === "string") {
-      const c = await ctx.db.get(input.connectionId as Id<"gmailConnections">);
-      if (!c || c.tenantId !== tenantId)
-        throw new Error("connection_not_found");
-    }
-    if (typeof input.threadId === "string") {
-      const t = await ctx.db.get(input.threadId as Id<"emailThreads">);
-      if (!t || t.tenantId !== tenantId) throw new Error("thread_not_found");
-    }
+    await authorizeJobInput(ctx, args.kind, input, tenantId, userId);
     return dto(
       await createJob(
         ctx,
@@ -85,6 +115,25 @@ export const enqueue = mutation({
       ),
     );
   },
+});
+
+export const enqueueInternal = internalMutation({
+  args: {
+    tenantId: v.id("tenants"),
+    kind: v.string(),
+    input: v.any(),
+    dedupeKey: v.optional(v.string()),
+    runAt: v.optional(v.number()),
+  },
+  handler: (ctx, args) =>
+    createJob(
+      ctx,
+      args.tenantId,
+      args.kind,
+      args.input,
+      args.dedupeKey,
+      args.runAt,
+    ),
 });
 
 export const start = internalMutation({
@@ -104,10 +153,14 @@ export const start = internalMutation({
     return { ...job, attempts: job.attempts + 1 };
   },
 });
-export const complete = generalPool.defineOnComplete<DataModel>({
-  context: v.object({ jobId: v.id("processingJobs") }),
+const completionContext = v.object({ jobId: v.id("processingJobs") });
+export const complete = generalPool.defineOnComplete<
+  DataModel,
+  typeof completionContext
+>({
+  context: completionContext,
   handler: async (ctx, { context, result }) => {
-    const job = await ctx.db.get(context.jobId);
+    const job: Doc<"processingJobs"> | null = await ctx.db.get(context.jobId);
     if (!job) return;
     const now = Date.now();
     if (result.kind === "success")
@@ -158,6 +211,57 @@ export const retentionBatch = internalMutation({
       .paginate({ cursor: cursor ?? null, numItems: 50 });
     for (const t of page.page)
       if (t.latestMessageAt < cutoff) {
+        for (const row of await ctx.db
+          .query("classifications")
+          .withIndex("by_thread", (q) => q.eq("threadId", t._id))
+          .collect())
+          await ctx.db.delete(row._id);
+        for (const row of await ctx.db
+          .query("threadSummaries")
+          .withIndex("by_thread", (q) => q.eq("threadId", t._id))
+          .collect())
+          await ctx.db.delete(row._id);
+        for (const row of await ctx.db
+          .query("threadAnalyses")
+          .withIndex("by_thread_created", (q) => q.eq("threadId", t._id))
+          .collect())
+          await ctx.db.delete(row._id);
+        for (const row of await ctx.db
+          .query("gmailDrafts")
+          .withIndex("by_thread_status", (q) => q.eq("threadId", t._id))
+          .collect())
+          await ctx.db.delete(row._id);
+        for (const row of await ctx.db
+          .query("followUpReminders")
+          .withIndex("by_thread", (q) => q.eq("threadId", t._id))
+          .collect()) {
+          if (row.scheduledWorkId)
+            await generalPool.cancel(ctx, row.scheduledWorkId as any);
+          await ctx.db.delete(row._id);
+        }
+        for (const row of await ctx.db
+          .query("notifications")
+          .withIndex("by_thread", (q) => q.eq("threadId", t._id))
+          .collect())
+          await ctx.db.delete(row._id);
+        for (const generation of await ctx.db
+          .query("replyGenerations")
+          .withIndex("by_thread_created", (q) => q.eq("threadId", t._id))
+          .collect()) {
+          for (const option of await ctx.db
+            .query("replyOptions")
+            .withIndex("by_generation_rank", (q) =>
+              q.eq("generationId", generation._id),
+            )
+            .collect())
+            await ctx.db.delete(option._id);
+          await ctx.db.delete(generation._id);
+        }
+        for (const option of await ctx.db
+          .query("replyOptions")
+          .withIndex("by_thread", (q) => q.eq("threadId", t._id))
+          .collect())
+          await ctx.db.delete(option._id);
         for (const m of await ctx.db
           .query("emailMessages")
           .withIndex("by_thread_sent", (q) => q.eq("threadId", t._id))
@@ -171,6 +275,18 @@ export const retentionBatch = internalMutation({
         }
         await ctx.db.delete(t._id);
       }
+    for (const job of await ctx.db.query("processingJobs").collect())
+      if (
+        ["SUCCEEDED", "CANCELLED"].includes(job.status) &&
+        (job.completedAt ?? Infinity) < cutoff
+      )
+        await ctx.db.delete(job._id);
+    const auditCutoff = Date.now() - 365 * 86400000;
+    for (const audit of await ctx.db
+      .query("auditEvents")
+      .withIndex("by_created", (q) => q.lt("createdAt", auditCutoff))
+      .take(100))
+      await ctx.db.delete(audit._id);
     if (!page.isDone)
       await ctx.scheduler.runAfter(0, internal.jobs.retentionBatch, {
         cursor: page.continueCursor,

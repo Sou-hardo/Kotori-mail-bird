@@ -344,6 +344,35 @@ export const latestAnalysis = query({
     return rows[0] ? dto(rows[0]) : null;
   },
 });
+
+const reviewRules: Array<[string, RegExp]> = [
+  [
+    "FINANCIAL_COMMITMENT",
+    /\b(?:pay|payment|invoice|refund|budget|price|cost|usd|eur|£|\$\d)\b/i,
+  ],
+  [
+    "LEGAL_OR_CONTRACT",
+    /\b(?:contract|agreement|terms|legal|liability|nda|indemnif|signature)\b/i,
+  ],
+  [
+    "RECRUITMENT",
+    /\b(?:candidate|interview|hire|hiring|offer|salary|recruit)\b/i,
+  ],
+  [
+    "COMPLAINT",
+    /\b(?:complaint|unacceptable|disappointed|escalat|dissatisfied|poor service)\b/i,
+  ],
+  [
+    "SENSITIVE_INFORMATION",
+    /\b(?:password|secret|ssn|social security|passport|medical|bank account|credit card|confidential)\b/i,
+  ],
+  [
+    "DEADLINE_OR_PROMISE",
+    /\b(?:deadline|due (?:by|on)|promise|guarantee|commit(?:ted)?|will (?:deliver|finish|send)|by (?:monday|tuesday|wednesday|thursday|friday|tomorrow|eod))\b/i,
+  ],
+];
+const address = (value: string) =>
+  (value.match(/<([^>]+)>/)?.[1] ?? value).trim().toLowerCase();
 export const replyAction = mutation({
   args: {
     id: v.string(),
@@ -351,10 +380,6 @@ export const replyAction = mutation({
     body: v.optional(v.string()),
     reason: v.optional(v.string()),
     acknowledgements: v.optional(v.array(v.string())),
-    requiredReviewFlags: v.array(v.string()),
-    to: v.array(v.string()),
-    cc: v.array(v.string()),
-    sourceMessageId: v.optional(v.string()),
     metadata: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
@@ -364,6 +389,8 @@ export const replyAction = mutation({
     const thread = await ctx.db.get(option.threadId);
     if (!thread || thread.tenantId !== p.tenantId)
       throw new Error("option_not_found");
+    if (!["edit", "reject", "approve"].includes(args.action))
+      throw new Error("invalid_action");
     let body = option.body,
       version = option.version;
     if (args.action === "edit") {
@@ -374,10 +401,58 @@ export const replyAction = mutation({
       await ctx.db.patch(option._id, { body, version });
     }
     if (args.action === "approve") {
-      if (option.generationId)
-        await ctx.db.patch(option.generationId, {
+      const connection = await ctx.db.get(thread.gmailConnectionId);
+      const messages = await ctx.db
+        .query("emailMessages")
+        .withIndex("by_thread_sent", (q) => q.eq("threadId", thread._id))
+        .order("desc")
+        .collect();
+      const owner = address(connection?.emailAddress ?? "");
+      const inbound = messages.find(
+        (message) => address(message.fromAddress) !== owner,
+      );
+      if (!inbound) throw new Error("no_reply_recipient");
+      const seen = new Set<string>();
+      const unique = (values: string[]) =>
+        values.filter((value) => {
+          const normalized = address(value);
+          if (!normalized || normalized === owner || seen.has(normalized))
+            return false;
+          seen.add(normalized);
+          return true;
+        });
+      const to = unique([inbound.fromAddress, ...inbound.toAddresses]);
+      const cc = unique(inbound.ccAddresses);
+      if (!to.length) throw new Error("no_reply_recipient");
+      const generation = option.generationId
+        ? await ctx.db.get(option.generationId)
+        : null;
+      const safetyText = [
+        thread.subject,
+        ...messages.flatMap((message) => [message.bodyText, message.snippet]),
+        generation?.intent,
+        generation?.identity,
+        generation?.closing,
+        option.body,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const requiredReviewFlags = reviewRules
+        .filter(([, rule]) => rule.test(safetyText))
+        .map(([flag]) => flag);
+      if (/\b(?:attach(?:ed|ment)?|enclos(?:ed|ure))\b/i.test(option.body))
+        requiredReviewFlags.push("MISSING_ATTACHMENT");
+      if (new Set([...to, ...cc].map(address)).size > 1)
+        requiredReviewFlags.push("MULTIPLE_RECIPIENTS");
+      const required = [...new Set(requiredReviewFlags)];
+      const acknowledged = new Set(args.acknowledgements ?? []);
+      const missing = required.filter((flag) => !acknowledged.has(flag));
+      if (missing.length)
+        throw new Error(`review_acknowledgement_required:${missing.join(",")}`);
+      if (generation)
+        await ctx.db.patch(generation._id, {
           acknowledgedFlags: args.acknowledgements ?? [],
-          requiredReviewFlags: args.requiredReviewFlags,
+          requiredReviewFlags: required,
           updatedAt: Date.now(),
         });
       const existing = await ctx.db
@@ -390,9 +465,9 @@ export const replyAction = mutation({
           replyOptionId: option._id,
           status: "APPROVED",
           body: option.body,
-          toAddresses: args.to,
-          ccAddresses: args.cc,
-          sourceMessageId: args.sourceMessageId,
+          toAddresses: to,
+          ccAddresses: cc,
+          sourceMessageId: inbound.gmailMessageId,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         });

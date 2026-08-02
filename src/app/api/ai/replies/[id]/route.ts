@@ -88,10 +88,6 @@ export async function PATCH(
     reason: input.action === "reject" ? input.reason : undefined,
     acknowledgements:
       input.action === "approve" ? input.acknowledgements : undefined,
-    requiredReviewFlags: currentFlags,
-    to: recipients.to,
-    cc: recipients.cc,
-    sourceMessageId: (inbound as { id?: string }).id,
     metadata:
       input.action === "reject"
         ? {
