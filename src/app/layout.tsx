@@ -16,16 +16,18 @@ export const metadata: Metadata = {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const initialToken =
-    process.env.PLAYWRIGHT_TEST_MODE === "1" ? null : await getToken();
+  const testMode = process.env.PLAYWRIGHT_TEST_MODE === "1";
+  const initialToken = testMode ? null : await getToken();
   return (
     <html lang="en">
       <body>
         <a className="skip-link" href="#main-content">
           Skip to content
         </a>
-        <AuthProvider initialToken={initialToken}>{children}</AuthProvider>
-        <ServiceWorker />
+        <AuthProvider initialToken={initialToken} disabled={testMode}>
+          {children}
+        </AuthProvider>
+        {!testMode && <ServiceWorker />}
       </body>
     </html>
   );
