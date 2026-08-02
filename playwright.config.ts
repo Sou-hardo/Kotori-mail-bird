@@ -10,7 +10,11 @@ export default defineConfig({
     command: "pnpm dev --hostname 127.0.0.1 --port 3100",
     url: "http://127.0.0.1:3100/test/mobile-smoke",
     reuseExistingServer: !process.env.CI,
-    env: { PLAYWRIGHT_TEST_MODE: "1" },
+    env: {
+      PLAYWRIGHT_TEST_MODE: "1",
+      NEXT_PUBLIC_CONVEX_URL: "https://test.convex.cloud",
+      NEXT_PUBLIC_CONVEX_SITE_URL: "https://test.convex.site",
+    },
     timeout: 120_000,
   },
   projects: [{ name: "mobile-chromium", use: { ...devices["Pixel 7"] } }],

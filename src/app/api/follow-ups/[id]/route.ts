@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
-import { enqueueOperationalJob, QUEUES } from "@/lib/jobs/queues";
+import { fetchAuthMutation } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 export async function PATCH(
   r: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { userId, tenantId } = await requireCurrentTenant();
   const { id } = await params;
   const input = z
     .object({
@@ -17,30 +15,20 @@ export async function PATCH(
       status: z.enum(["OPEN", "SNOOZED", "DONE"]).optional(),
     })
     .parse(await r.json());
-  const result = await db.followUpReminder.updateMany({
-    where: { id, userId },
-    data: input,
+  const reminder = await fetchAuthMutation(convexApi.jobs.saveReminder, {
+    id,
+    input: {
+      ...input,
+      ...(input.dueAt ? { dueAt: input.dueAt.getTime() } : {}),
+    },
   });
-  const reminder = await db.followUpReminder.findFirst({
-    where: { id, userId },
-  });
-  if (reminder && reminder.status !== "DONE")
-    await enqueueOperationalJob(
-      QUEUES.reminders,
-      tenantId,
-      "reminder.due",
-      { reminderId: reminder.id },
-      `${reminder.id}:${reminder.updatedAt.toISOString()}`,
-      { delay: Math.max(0, reminder.dueAt.getTime() - Date.now()) },
-    );
-  return NextResponse.json(result);
+  return NextResponse.json(reminder ? { count: 1 } : { count: 0 });
 }
 export async function DELETE(
   _: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { userId } = await requireCurrentTenant();
   const { id } = await params;
-  await db.followUpReminder.deleteMany({ where: { id, userId } });
+  await fetchAuthMutation(convexApi.jobs.deleteReminder, { id });
   return new NextResponse(null, { status: 204 });
 }

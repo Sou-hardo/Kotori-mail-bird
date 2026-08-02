@@ -49,6 +49,14 @@ export const replyRequestSchema = z
   })
   .strict();
 
+export const replyPreferenceSchema = z
+  .object({
+    generateThreeSuggestions: z.boolean(),
+  })
+  .strict();
+
+export type ReplySuggestionCount = 1 | 3;
+
 const draftSchema = z
   .object({
     label: z.string().trim().min(1).max(80),
@@ -56,40 +64,51 @@ const draftSchema = z
   })
   .strict();
 
-export const replyOutputSchema = z
-  .object({
-    schemaVersion: z.literal(AI_SCHEMA_VERSION),
-    drafts: z.array(draftSchema).length(3),
-  })
-  .strict()
-  .superRefine(({ drafts }, context) => {
-    const normalized = drafts.map((draft) =>
-      draft.body.toLowerCase().replace(/\s+/g, " ").trim(),
-    );
-    if (new Set(normalized).size !== 3) {
-      context.addIssue({
-        code: "custom",
-        path: ["drafts"],
-        message: "drafts must be meaningfully different",
-      });
-    }
-    for (let left = 0; left < normalized.length; left += 1) {
-      for (let right = left + 1; right < normalized.length; right += 1) {
-        const a = new Set(normalized[left]!.split(" "));
-        const b = new Set(normalized[right]!.split(" "));
-        const overlap = [...a].filter((word) => b.has(word)).length;
-        const union = new Set([...a, ...b]).size;
-        if (union && overlap / union > 0.9) {
-          context.addIssue({
-            code: "custom",
-            path: ["drafts", right],
-            message: "drafts are too similar",
-          });
+function outputSchemaFor(count: ReplySuggestionCount) {
+  return z
+    .object({
+      schemaVersion: z.literal(AI_SCHEMA_VERSION),
+      drafts: z.array(draftSchema).length(count),
+    })
+    .strict()
+    .superRefine(({ drafts }, context) => {
+      const normalized = drafts.map((draft) =>
+        draft.body.toLowerCase().replace(/\s+/g, " ").trim(),
+      );
+      if (new Set(normalized).size !== drafts.length) {
+        context.addIssue({
+          code: "custom",
+          path: ["drafts"],
+          message: "drafts must be meaningfully different",
+        });
+      }
+      for (let left = 0; left < normalized.length; left += 1) {
+        for (let right = left + 1; right < normalized.length; right += 1) {
+          const a = new Set(normalized[left]!.split(" "));
+          const b = new Set(normalized[right]!.split(" "));
+          const overlap = [...a].filter((word) => b.has(word)).length;
+          const union = new Set([...a, ...b]).size;
+          if (union && overlap / union > 0.9) {
+            context.addIssue({
+              code: "custom",
+              path: ["drafts", right],
+              message: "drafts are too similar",
+            });
+          }
         }
       }
-    }
-  });
+    });
+}
+
+export const replyOutputSchemaFor = (count: ReplySuggestionCount) =>
+  outputSchemaFor(count);
+
+export const replyOutputSchema = z.union([
+  outputSchemaFor(1),
+  outputSchemaFor(3),
+]);
 
 export type ThreadAnalysisResult = z.infer<typeof analysisSchema>;
 export type ReplyRequest = z.infer<typeof replyRequestSchema>;
 export type ReplyOutput = z.infer<typeof replyOutputSchema>;
+export type ReplyPreference = z.infer<typeof replyPreferenceSchema>;

@@ -1,7 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-type Option = { id: string; body: string; rank: number };
+type Option = { id: string; body: string; rank: number; tone?: string };
 const tones = [
   "Professional",
   "Warm professional",
@@ -14,6 +14,7 @@ export function ReplyComposer({
   threadId,
   initial,
   identities,
+  generateThreeSuggestions,
 }: {
   threadId: string;
   initial?: { flags: string[]; options: Option[] };
@@ -23,42 +24,98 @@ export function ReplyComposer({
     closing: string;
     isDefault: boolean;
   }>;
+  generateThreeSuggestions: boolean;
 }) {
   const [options, setOptions] = useState(initial?.options ?? []);
   const [flags, setFlags] = useState(initial?.flags ?? []);
   const [acks, setAcks] = useState<string[]>([]);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const generationSequence = useRef(0);
+
+  useEffect(
+    () => () => {
+      generationSequence.current += 1;
+    },
+    [],
+  );
+
+  async function pollGeneration(jobId: string, sequence: number) {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+      if (generationSequence.current !== sequence) return;
+      const response = await fetch(
+        `/api/ai/replies?jobId=${encodeURIComponent(jobId)}&threadId=${encodeURIComponent(threadId)}`,
+        { cache: "no-store" },
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok)
+        throw new Error(data.error ?? "generation_status_unavailable");
+      if (data.status === "SUCCEEDED") {
+        const completedOptions = Array.isArray(data.options)
+          ? data.options
+          : [];
+        if (!completedOptions.length) throw new Error("generation_empty");
+        setOptions(completedOptions);
+        setFlags((current) =>
+          data.requiredReviewFlags?.length ? data.requiredReviewFlags : current,
+        );
+        setStatus(
+          completedOptions.length === 1
+            ? "Your editable suggestion is ready. Review every word before approving it as a Gmail draft."
+            : `${completedOptions.length} editable options are ready. Review every word before approving a Gmail draft.`,
+        );
+        return;
+      }
+      if (["FAILED", "DEAD_LETTER", "CANCELLED"].includes(data.status))
+        throw new Error(data.error ?? "generation_failed");
+    }
+    throw new Error("generation_timed_out");
+  }
+
   async function generate(form: FormData) {
+    const sequence = generationSequence.current + 1;
+    generationSequence.current = sequence;
     setBusy(true);
-    setStatus("Creating three distinct options…");
-    const res = await fetch("/api/ai/replies", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        threadId,
-        intent: form.get("intent"),
-        tone: form.get("tone"),
-        length: form.get("length"),
-        identityId: form.get("identityId"),
-        acknowledgements: acks,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.status === 409) {
-      setFlags(data.flags);
-      setStatus("Please review the safety notes first.");
-    } else if (res.ok)
+    setStatus(
+      generateThreeSuggestions
+        ? "Creating three distinct options…"
+        : "Creating one focused suggestion…",
+    );
+    try {
+      const res = await fetch("/api/ai/replies", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId,
+          intent: form.get("intent"),
+          tone: form.get("tone"),
+          length: form.get("length"),
+          identityId: form.get("identityId"),
+          acknowledgements: acks,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        setFlags(data.flags ?? []);
+        setStatus("Please review the safety notes first.");
+      } else if (res.ok) {
+        setFlags(data.requiredReviewFlags ?? flags);
+        setStatus(
+          `Generation queued. Your ${generateThreeSuggestions ? "suggestions" : "suggestion"} will appear here automatically.`,
+        );
+        await pollGeneration(data.jobId, sequence);
+      } else {
+        throw new Error(data.error ?? "generation_failed");
+      }
+    } catch (error) {
+      if (generationSequence.current !== sequence) return;
       setStatus(
-        `Generation queued (${data.jobId}). Refresh shortly to review exactly three options.`,
+        `Could not generate: ${error instanceof Error ? error.message : "generation_failed"}`,
       );
-    else
-      setStatus(
-        data.error
-          ? `Could not generate: ${data.error}`
-          : "Could not generate replies. Please try again.",
-      );
-    setBusy(false);
+    } finally {
+      if (generationSequence.current === sequence) setBusy(false);
+    }
   }
   async function action(
     id: string,
@@ -171,10 +228,9 @@ export function ReplyComposer({
             ))}
           </fieldset>
         )}
-        <button className="primary" disabled={busy}>
-          {options.length
-            ? "Regenerate three options"
-            : "Create three reply options"}
+        <button className="primary" disabled={busy} type="submit">
+          {options.length ? "Regenerate" : "Create"}{" "}
+          {generateThreeSuggestions ? "three reply options" : "suggestion"}
         </button>
       </form>
       {status && (
@@ -188,13 +244,15 @@ export function ReplyComposer({
             <header>
               <strong>Option {i + 1}</strong>
               <span>
-                {["Balanced", "Brief & direct", "Warm & collaborative"][i]}
+                {o.tone ??
+                  ["Balanced", "Brief & direct", "Warm & collaborative"][i] ??
+                  "Editable"}
               </span>
             </header>
             <textarea
               aria-label={`Reply option ${i + 1}`}
-              defaultValue={o.body}
-              onBlur={(e) =>
+              value={o.body}
+              onChange={(e) =>
                 setOptions(
                   options.map((x) =>
                     x.id === o.id ? { ...x, body: e.target.value } : x,

@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { validateServerEnv } from "./env";
 
 const valid = {
-  DATABASE_URL: "postgresql://user:pass@localhost:5432/kotori",
-  REDIS_URL: "redis://localhost:6379",
-  AUTH_SECRET: "a-secret-that-is-at-least-32-characters",
-  AUTH_GOOGLE_ID: "client-id",
-  AUTH_GOOGLE_SECRET: "client-secret",
+  NEXT_PUBLIC_CONVEX_URL: "https://example.convex.cloud",
+  NEXT_PUBLIC_CONVEX_SITE_URL: "https://example.convex.site",
+  BETTER_AUTH_SECRET: "a-secret-that-is-at-least-32-characters",
+  GOOGLE_CLIENT_ID: "client-id",
+  GOOGLE_CLIENT_SECRET: "client-secret",
   APP_URL: "http://localhost:3000",
   GMAIL_OAUTH_CLIENT_ID: "gmail-client-id",
   GMAIL_OAUTH_CLIENT_SECRET: "gmail-client-secret",
@@ -20,12 +20,26 @@ const valid = {
 
 describe("server environment", () => {
   it("accepts a complete environment", () => {
-    expect(validateServerEnv(valid).DATABASE_URL).toBe(valid.DATABASE_URL);
+    expect(validateServerEnv(valid).NEXT_PUBLIC_CONVEX_URL).toBe(
+      valid.NEXT_PUBLIC_CONVEX_URL,
+    );
   });
 
   it("rejects a malformed encryption key", () => {
     expect(() =>
       validateServerEnv({ ...valid, CREDENTIAL_ENCRYPTION_KEY: "short" }),
     ).toThrow();
+  });
+
+  it("treats empty optional VAPID values as unset", () => {
+    const result = validateServerEnv({
+      ...valid,
+      VAPID_PUBLIC_KEY: "",
+      VAPID_PRIVATE_KEY: "",
+      VAPID_SUBJECT: "",
+    });
+    expect(result.VAPID_PUBLIC_KEY).toBeUndefined();
+    expect(result.VAPID_PRIVATE_KEY).toBeUndefined();
+    expect(result.VAPID_SUBJECT).toBeUndefined();
   });
 });

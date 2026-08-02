@@ -2,14 +2,14 @@ import type { Credentials } from "google-auth-library";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { requireCurrentTenant } from "@/lib/auth/current-tenant";
-import { db } from "@/lib/db";
+import { fetchAuthMutation } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 import { getServerEnv } from "@/lib/env";
 import { GMAIL_SCOPES, oauthClient, verifyOAuthState } from "@/lib/gmail/oauth";
 import {
   encryptCredentials,
   decryptCredentials,
 } from "@/lib/security/credentials";
-import { enqueueSync } from "@/lib/jobs/queues";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
       { status: 400 },
     );
   const env = getServerEnv();
-  const state = verifyOAuthState(stateToken, env.AUTH_SECRET);
+  const state = verifyOAuthState(stateToken, env.BETTER_AUTH_SECRET);
   const pending = decryptCredentials<{ state: string; verifier: string }>(
     cookie,
     env.CREDENTIAL_ENCRYPTION_KEY,
@@ -64,46 +64,21 @@ export async function GET(request: Request) {
     tokens as Credentials,
     env.CREDENTIAL_ENCRYPTION_KEY,
   );
-  const connection = await db.$transaction(async (tx) => {
-    const saved = await tx.gmailConnection.upsert({
-      where: {
-        tenantId_googleAccountId: {
-          tenantId: state.tenantId,
-          googleAccountId: oauth.data.id,
-        },
-      },
-      create: {
-        tenantId: state.tenantId,
-        googleAccountId: oauth.data.id,
-        emailAddress: oauth.data.email,
-        encryptedCredentials,
-        scopes,
-        syncState: { create: {} },
-      },
-      update: {
-        emailAddress: oauth.data.email,
-        encryptedCredentials,
-        scopes,
-        status: "ACTIVE",
-        lastError: null,
-      },
-    });
-    await tx.syncState.upsert({
-      where: { gmailConnectionId: saved.id },
-      create: { gmailConnectionId: saved.id },
-      update: {},
-    });
-    await tx.auditEvent.create({
-      data: {
-        tenantId: state.tenantId,
-        actorId: state.userId,
-        action: "CONNECTION_CREATED",
-        targetType: "GmailConnection",
-        targetId: saved.id,
-      },
-    });
-    return saved;
+  const connection = await fetchAuthMutation(
+    convexApi.domain.upsertConnection,
+    {
+      tenantId: state.tenantId,
+      actorId: state.userId,
+      googleAccountId: oauth.data.id,
+      emailAddress: oauth.data.email,
+      encryptedCredentials,
+      scopes,
+    },
+  );
+  await fetchAuthMutation(convexApi.jobs.enqueue, {
+    kind: "gmail.sync",
+    input: { connectionId: connection.id, forceFull: true },
+    dedupeKey: `${connection.id}:initial`,
   });
-  await enqueueSync(connection, true);
   return NextResponse.redirect(new URL("/?gmail=connected", env.APP_URL));
 }

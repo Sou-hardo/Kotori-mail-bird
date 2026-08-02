@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Icon } from "./icons";
+import { authClient } from "@/lib/auth-client";
 
 const nav = [
   ["/inbox", "Inbox", "inbox"],
@@ -46,6 +47,16 @@ export function AppShell({
             <strong>{user.name ?? "Kotori user"}</strong>
             <small>{user.email}</small>
           </span>
+          <button
+            type="button"
+            onClick={() =>
+              authClient.signOut({
+                fetchOptions: { onSuccess: () => location.assign("/sign-in") },
+              })
+            }
+          >
+            Sign out
+          </button>
         </div>
       </aside>
       <main id="main-content">{children}</main>

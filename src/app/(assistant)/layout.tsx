@@ -1,4 +1,5 @@
-import { auth } from "@/auth";
+import { isAuthenticated, fetchAuthQuery } from "@/lib/auth-server";
+import { convexApi } from "@/lib/convex-api";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 
@@ -7,7 +8,7 @@ export default async function AssistantLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth();
-  if (!session?.user) redirect("/api/auth/signin");
-  return <AppShell user={session.user}>{children}</AppShell>;
+  if (!(await isAuthenticated())) redirect("/sign-in");
+  const principal = await fetchAuthQuery(convexApi.domain.currentPrincipal, {});
+  return <AppShell user={principal.user}>{children}</AppShell>;
 }
