@@ -57,3 +57,40 @@ export async function POST(request: Request) {
     { status: 202 },
   );
 }
+
+const terminalFailureStatuses = new Set(["FAILED", "DEAD_LETTER", "CANCELLED"]);
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const jobId = searchParams.get("jobId");
+  const threadId = searchParams.get("threadId");
+  if (!jobId || !threadId)
+    return NextResponse.json(
+      { error: "jobId_and_threadId_required" },
+      { status: 400 },
+    );
+
+  const job = await fetchAuthQuery(convexApi.jobs.result, { jobId, threadId });
+  if (!job)
+    return NextResponse.json({ error: "job_not_found" }, { status: 404 });
+
+  if (job.status !== "SUCCEEDED")
+    return NextResponse.json(
+      {
+        status: job.status,
+        ...(terminalFailureStatuses.has(job.status)
+          ? { error: job.error ?? "generation_failed" }
+          : {}),
+      },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+
+  return NextResponse.json(
+    {
+      status: job.status,
+      options: job.options ?? [],
+      requiredReviewFlags: job.requiredReviewFlags ?? [],
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
+}

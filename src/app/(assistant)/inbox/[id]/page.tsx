@@ -11,7 +11,10 @@ export default async function ThreadPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const thread = await fetchAuthQuery(convexApi.domain.getThread, { id });
+  const [thread, replyPreference] = await Promise.all([
+    fetchAuthQuery(convexApi.domain.getThread, { id }),
+    fetchAuthQuery(convexApi.domain.getReplyPreference, {}),
+  ]);
   if (!thread) notFound();
   const identities = thread.identities;
   return (
@@ -66,6 +69,7 @@ export default async function ThreadPage({
       <ReplyComposer
         threadId={thread.id}
         identities={identities}
+        generateThreeSuggestions={replyPreference.generateThreeSuggestions}
         initial={
           thread.replyGenerations[0]
             ? {
