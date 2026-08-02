@@ -30,4 +30,16 @@ describe("server environment", () => {
       validateServerEnv({ ...valid, CREDENTIAL_ENCRYPTION_KEY: "short" }),
     ).toThrow();
   });
+
+  it("treats empty optional VAPID values as unset", () => {
+    const result = validateServerEnv({
+      ...valid,
+      VAPID_PUBLIC_KEY: "",
+      VAPID_PRIVATE_KEY: "",
+      VAPID_SUBJECT: "",
+    });
+    expect(result.VAPID_PUBLIC_KEY).toBeUndefined();
+    expect(result.VAPID_PRIVATE_KEY).toBeUndefined();
+    expect(result.VAPID_SUBJECT).toBeUndefined();
+  });
 });

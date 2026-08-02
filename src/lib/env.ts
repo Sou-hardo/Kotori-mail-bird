@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+const optionalNonEmptyString = z.preprocess(
+  (value) => (value === "" ? undefined : value),
+  z.string().min(1).optional(),
+);
+
 const serverEnvSchema = z.object({
   NEXT_PUBLIC_CONVEX_URL: z.string().url(),
   NEXT_PUBLIC_CONVEX_SITE_URL: z.string().url(),
@@ -18,9 +23,12 @@ const serverEnvSchema = z.object({
   DEEPSEEK_API_KEY: z.string().min(1),
   DEEPSEEK_BASE_URL: z.string().url().default("https://api.deepseek.com"),
   DEEPSEEK_MODEL: z.string().min(1).default("deepseek-chat"),
-  VAPID_PUBLIC_KEY: z.string().min(1).optional(),
-  VAPID_PRIVATE_KEY: z.string().min(1).optional(),
-  VAPID_SUBJECT: z.string().startsWith("mailto:").optional(),
+  VAPID_PUBLIC_KEY: optionalNonEmptyString,
+  VAPID_PRIVATE_KEY: optionalNonEmptyString,
+  VAPID_SUBJECT: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().startsWith("mailto:").optional(),
+  ),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
