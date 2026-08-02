@@ -57,10 +57,7 @@ const replyOptions = (result: unknown, expectedCount: 1 | 3) => {
       throw new Error("invalid_reply_output");
     return {
       tone: typeof tone === "string" ? tone : "",
-      body: body
-        .replace(/<[^>]*>/g, "")
-        .trim()
-        .slice(0, 20_000),
+      body: body.replace(/[<>]/g, "").trim().slice(0, 20_000),
     };
   });
 };

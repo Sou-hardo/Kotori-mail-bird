@@ -428,7 +428,7 @@ export const replyAction = mutation({
       auditMetadata: Record<string, unknown> = { version };
     if (args.action === "edit") {
       body = String(args.body ?? "")
-        .replace(/<[^>]*>/g, "")
+        .replace(/[<>]/g, "")
         .slice(0, 20000);
       version++;
       await ctx.db.patch(option._id, { body, version });
@@ -438,7 +438,7 @@ export const replyAction = mutation({
       auditMetadata = {
         version,
         reason: String(args.reason ?? "")
-          .replace(/<[^>]*>/g, "")
+          .replace(/[<>]/g, "")
           .slice(0, 1000),
       };
     if (args.action === "approve") {

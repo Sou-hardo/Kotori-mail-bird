@@ -149,10 +149,7 @@ export const saveReplies = internalMutation({
     if (a.result.options.length !== expectedCount)
       throw new Error(`invalid_reply_option_count:${expectedCount}`);
     const normalizedBodies = a.result.options.map((option) =>
-      option.body
-        .replace(/<[^>]*>/g, "")
-        .trim()
-        .slice(0, 20_000),
+      option.body.replace(/[<>]/g, "").trim().slice(0, 20_000),
     );
     if (
       normalizedBodies.some((body) => body.length === 0) ||
