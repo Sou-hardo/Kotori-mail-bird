@@ -16,6 +16,7 @@ export const syncStatus = v.union(
   v.literal("IDLE"),
   v.literal("RUNNING"),
   v.literal("FAILED"),
+  v.literal("QUOTA_PAUSED"),
 );
 export const threadCategory = v.union(
   v.literal("ACTION_REQUIRED"),
@@ -114,6 +115,15 @@ export default defineSchema({
     lastCompletedAt: v.optional(v.number()),
     lastError: v.optional(v.string()),
     updatedAt: v.number(),
+    phase: v.optional(v.string()),
+    backfillPageToken: v.optional(v.string()),
+    backfillDone: v.optional(v.boolean()),
+    totalThreads: v.optional(v.number()),
+    totalMessages: v.optional(v.number()),
+    importedThreads: v.optional(v.number()),
+    importedMessages: v.optional(v.number()),
+    resumeAt: v.optional(v.number()),
+    windowDays: v.optional(v.number()),
   }).index("by_connection", ["gmailConnectionId"]),
   emailThreads: defineTable({
     tenantId: v.id("tenants"),
@@ -143,7 +153,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_thread_gmail", ["threadId", "gmailMessageId"])
-    .index("by_thread_sent", ["threadId", "sentAt"]),
+    .index("by_thread_sent", ["threadId", "sentAt"])
+    .index("by_gmail_message", ["gmailMessageId"]),
   attachments: defineTable({
     messageId: v.id("emailMessages"),
     gmailAttachmentId: v.string(),
@@ -297,4 +308,11 @@ export default defineSchema({
   })
     .index("by_tenant_created", ["tenantId", "createdAt"])
     .index("by_created", ["createdAt"]),
+  quotaUsage: defineTable({
+    scope: v.string(),
+    windowKind: v.string(),
+    windowStart: v.number(),
+    units: v.number(),
+    updatedAt: v.number(),
+  }).index("by_scope_window", ["scope", "windowKind", "windowStart"]),
 });
