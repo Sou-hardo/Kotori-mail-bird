@@ -150,9 +150,23 @@ export const syncProgress = internalMutation({
 const header = (headers: any[], name: string) =>
   headers?.find((x) => String(x.name).toLowerCase() === name.toLowerCase())
     ?.value;
-const bodyText = (payload: any): string | undefined => {
+// Convex mutations run in a V8 isolate without the Node `Buffer` global, so
+// base64url decoding has to go through atob/TextDecoder instead.
+export const base64UrlToUtf8 = (data: string): string | undefined => {
+  try {
+    const base64 = data.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder("utf-8").decode(bytes);
+  } catch {
+    return undefined;
+  }
+};
+export const bodyText = (payload: any): string | undefined => {
   if (payload?.mimeType === "text/plain" && payload.body?.data)
-    return Buffer.from(payload.body.data, "base64url").toString("utf8");
+    return base64UrlToUtf8(payload.body.data);
   for (const part of payload?.parts ?? []) {
     const found = bodyText(part);
     if (found) return found;
