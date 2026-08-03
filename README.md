@@ -26,7 +26,11 @@ When Convex asks which project to use, select the existing `kotori-db` project r
 
 Set Convex backend variables with `pnpm convex env set`: `SITE_URL`, `BETTER_AUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, the Gmail OAuth values, `CREDENTIAL_ENCRYPTION_KEY`, DeepSeek values, and optional VAPID values. The Next.js environment needs `NEXT_PUBLIC_CONVEX_URL`, `NEXT_PUBLIC_CONVEX_SITE_URL`, `APP_URL`, the mailbox callback values, and the same credential-encryption key.
 
-Google sign-in callback: `/api/auth/callback/google`. Separate mailbox callback: `/api/gmail/callback`. The mailbox grant must return a refresh token and exactly the allowed Gmail scopes.
+Google sign-in callback: `/api/auth/callback/google`. Separate mailbox callback: `/api/gmail/callback`. The mailbox grant must return a refresh token and exactly the allowed Gmail scopes. The Gmail OAuth client must also permit the `openid` and `email` identity scopes alongside `gmail.readonly` and `gmail.compose`, or consent fails; these identity scopes verify the connecting Google account and are not persisted to the stored connection's scope list.
+
+## First run
+
+A user signs in with Google, is redirected to `/connect` because no `ACTIVE` Gmail connection exists yet, and grants Gmail access there. The OAuth callback verifies the granted scopes and the account identity, stores the encrypted connection, enqueues an initial sync, and returns the user to `/inbox`, which shows the connect confirmation while the first sync runs. From then on `/connect` redirects straight to `/inbox`. Settings exposes a mailbox card to trigger a manual sync or disconnect the mailbox; disconnecting returns the account to the gated state and back through `/connect` on the next visit.
 
 ## Validation and deployment
 
