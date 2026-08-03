@@ -1,5 +1,19 @@
-import { describe, expect, it } from "vitest";
-import { createOAuthState, verifyOAuthState } from "@/lib/gmail/oauth";
+import { describe, expect, it, vi } from "vitest";
+import {
+  GMAIL_SCOPES,
+  allowedGmailScopes,
+  createOAuthState,
+  gmailAuthorizationUrl,
+  verifyOAuthState,
+} from "@/lib/gmail/oauth";
+
+vi.mock("@/lib/env", () => ({
+  getServerEnv: () => ({
+    GMAIL_OAUTH_CLIENT_ID: "client-id",
+    GMAIL_OAUTH_CLIENT_SECRET: "client-secret",
+    GMAIL_OAUTH_REDIRECT_URI: "https://example.com/api/gmail/callback",
+  }),
+}));
 
 describe("Gmail OAuth state", () => {
   const secret = "a secure test secret with more than 32 characters";
@@ -18,5 +32,29 @@ describe("Gmail OAuth state", () => {
     expect(() => verifyOAuthState(token, secret, 700_000)).toThrow(
       "Expired OAuth state",
     );
+  });
+});
+
+describe("gmailAuthorizationUrl", () => {
+  it("requests Gmail and identity scopes but nothing broader", () => {
+    const url = new URL(gmailAuthorizationUrl("state-token", "challenge"));
+    const scope = url.searchParams.get("scope") ?? "";
+    const requested = scope.split(" ");
+    expect(requested).toEqual(expect.arrayContaining([...GMAIL_SCOPES]));
+    expect(requested).toEqual(expect.arrayContaining(["openid", "email"]));
+    expect(scope).not.toMatch(/gmail\.modify/);
+    expect(scope).not.toMatch(/gmail\.send/);
+    expect(scope).not.toMatch(/mail\.google\.com/);
+  });
+});
+
+describe("allowedGmailScopes", () => {
+  it("drops openid/email and keeps exactly the Gmail scopes", () => {
+    const granted = [...GMAIL_SCOPES, "openid", "email"].join(" ");
+    expect(allowedGmailScopes(granted)).toEqual([...GMAIL_SCOPES]);
+  });
+  it("returns a short array for a partial grant", () => {
+    expect(allowedGmailScopes(GMAIL_SCOPES[0])).toEqual([GMAIL_SCOPES[0]]);
+    expect(allowedGmailScopes(undefined)).toEqual([]);
   });
 });

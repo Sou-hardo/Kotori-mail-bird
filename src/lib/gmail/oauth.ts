@@ -13,6 +13,15 @@ export const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.compose",
 ] as const;
 
+export const IDENTITY_SCOPES = ["openid", "email"] as const;
+
+export function allowedGmailScopes(granted?: string): string[] {
+  const scopes = granted?.split(" ") ?? [];
+  return scopes.filter((scope) =>
+    GMAIL_SCOPES.includes(scope as (typeof GMAIL_SCOPES)[number]),
+  );
+}
+
 type OAuthState = {
   nonce: string;
   tenantId: string;
@@ -83,7 +92,7 @@ export function gmailAuthorizationUrl(state: string, challenge: string) {
     access_type: "offline",
     prompt: "consent",
     include_granted_scopes: false,
-    scope: [...GMAIL_SCOPES],
+    scope: [...GMAIL_SCOPES, ...IDENTITY_SCOPES],
     state,
     code_challenge: challenge,
     code_challenge_method: CodeChallengeMethod.S256,
