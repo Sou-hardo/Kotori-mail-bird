@@ -5,6 +5,8 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import type { Doc, Id, DataModel } from "./_generated/dataModel";
 import { generalPool, syncPool } from "./pools";
 import { dto, requirePrincipal } from "./principal";
+import { readUsage } from "./quota";
+import { shouldSkipPollActive } from "./gmailSync";
 
 const poolFor = (kind: string) =>
   kind === "gmail.sync" ? syncPool : generalPool;
@@ -275,6 +277,11 @@ export const pollActiveConnections = internalMutation({
       .paginate({ cursor: cursor ?? null, numItems: 50 });
     for (const c of page.page) {
       if (c.status !== "ACTIVE") continue;
+      const state = await ctx.db
+        .query("syncStates")
+        .withIndex("by_connection", (q) => q.eq("gmailConnectionId", c._id))
+        .unique();
+      if (shouldSkipPollActive(state, Date.now())) continue;
       const bucket = Math.floor(Date.now() / 300000);
       await createJob(
         ctx,
@@ -425,7 +432,8 @@ export const status = query({
   handler: async (ctx, { connectionId }) => {
     const { tenantId } = await requirePrincipal(ctx);
     const connection = await ctx.db.get(connectionId as Id<"gmailConnections">);
-    if (!connection || connection.tenantId !== tenantId) return null;
+    if (!connection || connection.tenantId !== tenantId)
+      return { syncState: null, quota: null, jobs: [] };
     const sync = await ctx.db
       .query("syncStates")
       .withIndex("by_connection", (q) =>
@@ -443,8 +451,19 @@ export const status = query({
     )
       .filter((j) => (j.input as any)?.connectionId === connectionId)
       .slice(0, 10);
+    // jobs.status is a plain query reading ctx.db directly, so quota usage
+    // is read via the shared helper rather than internal.quota.usage
+    // (a runQuery from inside a query is not available).
+    const quota = await readUsage(ctx, connection._id);
     return {
-      sync: sync ? dto(sync) : null,
+      syncState: sync ? dto(sync) : null,
+      quota: {
+        dayUnits: quota.dayUnits,
+        dayBudget: quota.dayBudget,
+        dayPercent: quota.dayPercent,
+        minuteUnits: quota.minuteUnits,
+        minuteBudget: quota.minuteBudget,
+      },
       jobs: jobs.map(dto),
     };
   },
