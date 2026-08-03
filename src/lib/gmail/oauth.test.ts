@@ -42,9 +42,12 @@ describe("gmailAuthorizationUrl", () => {
     const requested = scope.split(" ");
     expect(requested).toEqual(expect.arrayContaining([...GMAIL_SCOPES]));
     expect(requested).toEqual(expect.arrayContaining(["openid", "email"]));
-    expect(scope).not.toMatch(/gmail\.modify/);
-    expect(scope).not.toMatch(/gmail\.send/);
-    expect(scope).not.toMatch(/mail\.google\.com/);
+    // Substring checks rather than regexes: CodeQL flags unanchored URL
+    // patterns (js/regex/missing-regexp-anchor), and containment is exactly
+    // what this assertion means.
+    expect(scope).not.toContain("gmail.modify");
+    expect(scope).not.toContain("gmail.send");
+    expect(scope).not.toContain("mail.google.com");
   });
 });
 
