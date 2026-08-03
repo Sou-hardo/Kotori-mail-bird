@@ -414,6 +414,9 @@ export const retentionBatch = internalMutation({
       await ctx.scheduler.runAfter(0, internal.jobs.retentionBatch, {
         cursor: page.continueCursor,
       });
+    await ctx.scheduler.runAfter(0, internal.quota.prune, {
+      before: Date.now() - 2 * 24 * 60 * 60 * 1000,
+    });
     return { deleted };
   },
 });
