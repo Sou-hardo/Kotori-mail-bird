@@ -23,6 +23,7 @@ import type * as pools from "../pools.js";
 import type * as principal from "../principal.js";
 import type * as pushActions from "../pushActions.js";
 import type * as pushData from "../pushData.js";
+import type * as quota from "../quota.js";
 import type * as reminders from "../reminders.js";
 
 import type {
@@ -47,6 +48,7 @@ declare const fullApi: ApiFromModules<{
   principal: typeof principal;
   pushActions: typeof pushActions;
   pushData: typeof pushData;
+  quota: typeof quota;
   reminders: typeof reminders;
 }>;
 
