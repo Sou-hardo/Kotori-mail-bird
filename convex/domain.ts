@@ -33,6 +33,8 @@ export const setReplyPreference = mutation({
   },
 });
 
+const INBOX_THREAD_LIMIT = 200;
+
 export const listInbox = query({
   args: { q: v.optional(v.string()), filter: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -41,7 +43,7 @@ export const listInbox = query({
       .query("emailThreads")
       .withIndex("by_tenant_latest", (q) => q.eq("tenantId", tenantId))
       .order("desc")
-      .collect();
+      .take(INBOX_THREAD_LIMIT);
     const needle = args.q?.toLowerCase();
     const output = [];
     for (const row of rows) {
@@ -50,17 +52,8 @@ export const listInbox = query({
         (args.filter === "unread" && !row.isUnread)
       )
         continue;
-      const messages = await ctx.db
-        .query("emailMessages")
-        .withIndex("by_thread_sent", (q) => q.eq("threadId", row._id))
-        .order("desc")
-        .collect();
       const classification = await ctx.db
         .query("classifications")
-        .withIndex("by_thread", (q) => q.eq("threadId", row._id))
-        .unique();
-      const summary = await ctx.db
-        .query("threadSummaries")
         .withIndex("by_thread", (q) => q.eq("threadId", row._id))
         .unique();
       if (
@@ -68,6 +61,24 @@ export const listInbox = query({
         classification?.category !== "ACTION_REQUIRED"
       )
         continue;
+      // The `q` search needs every message's fromAddress/bodyText, so fetch
+      // the full list on that path; otherwise only the newest message is
+      // ever returned, so take(1) off the same index.
+      const messages = needle
+        ? await ctx.db
+            .query("emailMessages")
+            .withIndex("by_thread_sent", (q) => q.eq("threadId", row._id))
+            .order("desc")
+            .collect()
+        : await ctx.db
+            .query("emailMessages")
+            .withIndex("by_thread_sent", (q) => q.eq("threadId", row._id))
+            .order("desc")
+            .take(1);
+      const summary = await ctx.db
+        .query("threadSummaries")
+        .withIndex("by_thread", (q) => q.eq("threadId", row._id))
+        .unique();
       if (
         needle &&
         ![
@@ -338,6 +349,34 @@ export const getConnection = query({
       .withIndex("by_connection", (q) => q.eq("gmailConnectionId", row._id))
       .unique();
     return { ...dto(row), syncState: sync ? dto(sync) : null };
+  },
+});
+export const listConnections = query({
+  args: {},
+  handler: async (ctx) => {
+    const p = await requirePrincipal(ctx);
+    const rows = (
+      await ctx.db
+        .query("gmailConnections")
+        .withIndex("by_tenant_google", (q) => q.eq("tenantId", p.tenantId))
+        .collect()
+    ).sort((a, b) => b.updatedAt - a.updatedAt);
+    const out = [];
+    for (const row of rows) {
+      const sync = await ctx.db
+        .query("syncStates")
+        .withIndex("by_connection", (q) => q.eq("gmailConnectionId", row._id))
+        .unique();
+      // dto() passes encryptedCredentials through unchanged; strip it here
+      // since this response goes to the client.
+      const connection = dto(row) as Record<string, unknown>;
+      delete connection.encryptedCredentials;
+      out.push({
+        ...connection,
+        syncState: sync ? dto(sync) : null,
+      });
+    }
+    return out;
   },
 });
 export const revokeConnection = mutation({
