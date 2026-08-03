@@ -8,10 +8,7 @@ export function progressPercent(
   return Math.min(100, Math.max(0, pct));
 }
 
-export function remaining(
-  imported?: number,
-  total?: number,
-): number | null {
+export function remaining(imported?: number, total?: number): number | null {
   if (total === undefined || total === null) return null;
   if (imported === undefined || imported === null) return null;
   return Math.max(0, total - imported);

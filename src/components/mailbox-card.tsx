@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { SyncProgress } from "@/components/sync-progress";
 
-type SyncPhase = "IDLE" | "COUNTING" | "BACKFILL" | "INCREMENTAL" | "QUOTA_PAUSED";
+type SyncPhase =
+  "IDLE" | "COUNTING" | "BACKFILL" | "INCREMENTAL" | "QUOTA_PAUSED";
 
 type SyncState = {
   status: "IDLE" | "RUNNING" | "FAILED" | "QUOTA_PAUSED" | string;
@@ -116,7 +117,11 @@ export function MailboxCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection?.id]);
 
-  async function pollSync(connectionId: string, jobId: string, sequence: number) {
+  async function pollSync(
+    connectionId: string,
+    jobId: string,
+    sequence: number,
+  ) {
     const deadline = Date.now() + MAX_POLL_MS;
     while (Date.now() < deadline) {
       await new Promise<void>((resolve) => {
@@ -246,7 +251,9 @@ export function MailboxCard({
       {!quotaPaused && syncState?.lastCompletedAt && (
         <p>
           Last refresh: {syncState.status.toLowerCase()} (
-          {formatTimestamp(syncState.lastCompletedAt ?? syncState.lastStartedAt)}
+          {formatTimestamp(
+            syncState.lastCompletedAt ?? syncState.lastStartedAt,
+          )}
           )
         </p>
       )}

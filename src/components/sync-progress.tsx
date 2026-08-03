@@ -23,7 +23,8 @@ export function SyncProgress({
   quota,
   compact = false,
 }: SyncProgressProps) {
-  const usingMessages = totalThreads === undefined && totalMessages !== undefined;
+  const usingMessages =
+    totalThreads === undefined && totalMessages !== undefined;
   const imported = usingMessages ? importedMessages : importedThreads;
   const total = usingMessages ? totalMessages : totalThreads;
   const unit = usingMessages ? "messages" : "threads";
@@ -41,7 +42,7 @@ export function SyncProgress({
 
   return (
     <div
-      className={`sync-progress${compact ? " sync-progress-compact" : ""}`}
+      className={`sync-progress${compact ? "sync-progress-compact" : ""}`}
       role="status"
     >
       <p className="sync-progress-phase">{label}</p>

@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  phaseLabel,
-  progressPercent,
-  remaining,
-} from "@/lib/sync-progress";
+import { phaseLabel, progressPercent, remaining } from "@/lib/sync-progress";
 
 describe("progressPercent", () => {
   it("computes a normal percentage", () => {
@@ -49,17 +45,13 @@ describe("phaseLabel", () => {
   it("labels known phases", () => {
     expect(phaseLabel("BACKFILL", "RUNNING")).toBe("Importing mail history…");
     expect(phaseLabel("COUNTING", "RUNNING")).toBe("Counting mailbox size…");
-    expect(phaseLabel("INCREMENTAL", "RUNNING")).toBe(
-      "Checking for new mail…",
-    );
+    expect(phaseLabel("INCREMENTAL", "RUNNING")).toBe("Checking for new mail…");
   });
 
   it("falls back to status when phase is missing", () => {
     expect(phaseLabel(undefined, "RUNNING")).toBe("Syncing…");
     expect(phaseLabel(undefined, "FAILED")).toBe("Sync failed");
-    expect(phaseLabel(undefined, "QUOTA_PAUSED")).toBe(
-      "Paused (Gmail quota)",
-    );
+    expect(phaseLabel(undefined, "QUOTA_PAUSED")).toBe("Paused (Gmail quota)");
   });
 
   it("defaults to Idle when nothing is known", () => {
