@@ -157,7 +157,7 @@ export const getThread = query({
     return {
       ...dto(thread),
       messages: messages.map((m) => ({ ...dto(m), attachments: [] })),
-      gmailConnection: dto(connection),
+      gmailConnection: connectionDto(connection),
       summary: summary ? dto(summary) : null,
       classification: classification ? dto(classification) : null,
       replyGenerations: generation
