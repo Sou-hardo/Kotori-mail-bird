@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { ZodError } from "zod";
 import { replyRequestSchema } from "@/lib/ai/schemas";
 import {
   detectReviewFlags,
@@ -10,7 +11,17 @@ import { convexApi } from "@/lib/convex-api";
 import { latestInbound, replyAllRecipients } from "@/lib/gmail/recipients";
 
 export async function POST(request: Request) {
-  const input = replyRequestSchema.parse(await request.json());
+  let input;
+  try {
+    input = replyRequestSchema.parse(await request.json());
+  } catch (error) {
+    if (error instanceof ZodError)
+      return NextResponse.json(
+        { error: "invalid_request", issues: error.issues },
+        { status: 400 },
+      );
+    throw error;
+  }
   const thread = await fetchAuthQuery(convexApi.domain.getThread, {
     id: input.threadId,
   });
