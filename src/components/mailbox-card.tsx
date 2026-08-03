@@ -29,6 +29,25 @@ function formatTimestamp(value?: string) {
   return date.toLocaleString();
 }
 
+const terminalFailureStatuses = ["FAILED", "DEAD_LETTER", "CANCELLED"];
+
+export type SyncJobOutcome =
+  | { kind: "pending" }
+  | { kind: "succeeded" }
+  | { kind: "failed"; status: string };
+
+export function resolveSyncJobOutcome(
+  jobs: Job[],
+  jobId: string,
+): SyncJobOutcome {
+  const job = jobs.find((j) => j.id === jobId);
+  if (!job) return { kind: "pending" };
+  if (job.status === "SUCCEEDED") return { kind: "succeeded" };
+  if (terminalFailureStatuses.includes(job.status))
+    return { kind: "failed", status: job.status };
+  return { kind: "pending" };
+}
+
 export function MailboxCard({
   connection,
 }: {
@@ -48,7 +67,11 @@ export function MailboxCard({
     [],
   );
 
-  async function pollSync(connectionId: string, sequence: number) {
+  async function pollSync(
+    connectionId: string,
+    jobId: string,
+    sequence: number,
+  ) {
     for (let attempt = 0; attempt < 60; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 1_000));
       if (pollSequence.current !== sequence) return;
@@ -61,14 +84,13 @@ export function MailboxCard({
         throw new Error(data.error ?? "sync_status_unavailable");
       if (data.sync) setSyncState(data.sync);
       const jobs: Job[] = Array.isArray(data.jobs) ? data.jobs : [];
-      const latest = jobs[0];
-      if (!latest) continue;
-      if (latest.status === "SUCCEEDED") {
+      const outcome = resolveSyncJobOutcome(jobs, jobId);
+      if (outcome.kind === "succeeded") {
         setStatus("Mailbox refresh finished.");
         return;
       }
-      if (["FAILED", "DEAD_LETTER", "CANCELLED"].includes(latest.status)) {
-        throw new Error(`Mailbox refresh ${latest.status.toLowerCase()}.`);
+      if (outcome.kind === "failed") {
+        throw new Error(`Mailbox refresh ${outcome.status.toLowerCase()}.`);
       }
     }
     throw new Error("Mailbox refresh timed out.");
@@ -89,8 +111,9 @@ export function MailboxCard({
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error ?? "sync_start_failed");
+      if (!data.jobId) throw new Error("sync_start_failed");
       setStatus("Refreshing mailbox…");
-      await pollSync(connection.id, sequence);
+      await pollSync(connection.id, data.jobId, sequence);
     } catch (err) {
       if (pollSequence.current !== sequence) return;
       setError(
