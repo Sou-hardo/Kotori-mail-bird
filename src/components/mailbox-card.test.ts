@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveSyncJobOutcome } from "./mailbox-card";
+import { resolveSyncJobOutcome, shouldKeepPolling } from "./mailbox-card";
 
 describe("resolveSyncJobOutcome", () => {
   it("stays pending when the target job is not yet in the list", () => {
@@ -39,5 +39,33 @@ describe("resolveSyncJobOutcome", () => {
     expect(
       resolveSyncJobOutcome([{ id: "job-2", status: "CANCELLED" }], "job-2"),
     ).toEqual({ kind: "failed", status: "CANCELLED" });
+  });
+});
+
+describe("shouldKeepPolling", () => {
+  it("stops when there is no sync state", () => {
+    expect(shouldKeepPolling(null)).toBe(false);
+  });
+
+  it("keeps polling for active phases", () => {
+    for (const phase of ["COUNTING", "BACKFILL", "INCREMENTAL"] as const) {
+      expect(shouldKeepPolling({ status: "RUNNING", phase })).toBe(true);
+    }
+  });
+
+  it("keeps polling when status is RUNNING even without a phase", () => {
+    expect(shouldKeepPolling({ status: "RUNNING" })).toBe(true);
+  });
+
+  it("stops when QUOTA_PAUSED, whether reported via phase or status", () => {
+    expect(
+      shouldKeepPolling({ status: "QUOTA_PAUSED", phase: "QUOTA_PAUSED" }),
+    ).toBe(false);
+    expect(shouldKeepPolling({ status: "QUOTA_PAUSED" })).toBe(false);
+  });
+
+  it("stops on IDLE and FAILED", () => {
+    expect(shouldKeepPolling({ status: "IDLE", phase: "IDLE" })).toBe(false);
+    expect(shouldKeepPolling({ status: "FAILED" })).toBe(false);
   });
 });

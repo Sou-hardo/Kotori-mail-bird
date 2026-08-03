@@ -97,7 +97,12 @@ test.describe("mailbox card", () => {
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
-            sync: { status: "RUNNING", updatedAt: "2026-07-02T00:00:00.000Z" },
+            syncState: {
+              status: "RUNNING",
+              phase: "BACKFILL",
+              totalThreads: 40,
+              importedThreads: 10,
+            },
             jobs: [{ id: "job-ok", status: "RUNNING" }],
           }),
         });
@@ -106,10 +111,13 @@ test.describe("mailbox card", () => {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          sync: {
-            status: "SUCCEEDED",
-            lastCompletedAt: "2026-07-02T00:01:00.000Z",
-            updatedAt: "2026-07-02T00:01:00.000Z",
+          syncState: {
+            status: "IDLE",
+            phase: "IDLE",
+            totalThreads: 40,
+            importedThreads: 40,
+            backfillDone: true,
+            lastCompletedAt: 1751414460000,
           },
           jobs: [{ id: "job-ok", status: "SUCCEEDED" }],
         }),
@@ -124,7 +132,8 @@ test.describe("mailbox card", () => {
       timeout: 5_000,
     });
     await expect(syncButton).toBeEnabled();
-    await expect(page.getByText(/Last refresh: succeeded/)).toBeVisible();
+    await expect(page.getByText("40 of 40 threads")).toBeVisible();
+    await expect(page.getByText(/Last refresh: idle/)).toBeVisible();
   });
 
   test("a terminal failure surfaces an alert and re-enables the button", async ({
@@ -141,7 +150,7 @@ test.describe("mailbox card", () => {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          sync: null,
+          syncState: null,
           jobs: [{ id: "job-bad", status: "FAILED" }],
         }),
       });
@@ -176,5 +185,38 @@ test.describe("mailbox card", () => {
       .poll(() => disconnectBody)
       .toEqual({ connectionId: "cm0000000000000000000010" });
     await expect(page.locator("main").getByRole("alert")).toHaveCount(0);
+  });
+
+  test("renders the import progress bar with correct aria values", async ({
+    page,
+  }) => {
+    await page.route("**/api/gmail/sync*", (route) =>
+      route.fulfill({ status: 500, body: "{}" }),
+    );
+    await page.goto("/test/mailbox-card?variant=in-progress");
+    const bar = page.getByRole("progressbar", {
+      name: "Mailbox import progress",
+    });
+    await expect(bar).toHaveAttribute("aria-valuenow", "25");
+    await expect(bar).toHaveAttribute("aria-valuemin", "0");
+    await expect(bar).toHaveAttribute("aria-valuemax", "100");
+    await expect(page.getByText("50 of 200 threads")).toBeVisible();
+    await expect(page.getByText("150 remaining")).toBeVisible();
+  });
+
+  test("quota-paused state disables Sync now and shows the resume time", async ({
+    page,
+  }) => {
+    await page.route("**/api/gmail/sync*", (route) =>
+      route.fulfill({ status: 500, body: "{}" }),
+    );
+    await page.goto("/test/mailbox-card?variant=quota-paused");
+    await expect(
+      page.getByText(/Paused to stay within Gmail's free tier/),
+    ).toBeVisible();
+    await expect(page.locator("main").getByRole("alert")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Sync mailbox now" }),
+    ).toBeDisabled();
   });
 });
