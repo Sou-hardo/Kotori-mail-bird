@@ -818,3 +818,16 @@ svg {
   color: var(--green);
   font-size: 14px;
 }
+.mailbox-card {
+  display: grid;
+  gap: 8px;
+}
+.mailbox-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+.notice.error {
+  background: #fbeaea;
+  color: #9c2f2f;
+}
