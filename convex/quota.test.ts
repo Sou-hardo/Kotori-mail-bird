@@ -79,12 +79,12 @@ describe("resolveBudgets", () => {
   });
 
   it("rejects a safety margin outside (0, 1]", () => {
-    expect(resolveBudgets({ GMAIL_QUOTA_SAFETY_MARGIN: "1.5" }).safetyMargin).toBe(
-      SAFETY_MARGIN,
-    );
-    expect(resolveBudgets({ GMAIL_QUOTA_SAFETY_MARGIN: "0" }).safetyMargin).toBe(
-      SAFETY_MARGIN,
-    );
+    expect(
+      resolveBudgets({ GMAIL_QUOTA_SAFETY_MARGIN: "1.5" }).safetyMargin,
+    ).toBe(SAFETY_MARGIN);
+    expect(
+      resolveBudgets({ GMAIL_QUOTA_SAFETY_MARGIN: "0" }).safetyMargin,
+    ).toBe(SAFETY_MARGIN);
   });
 });
 
@@ -100,9 +100,7 @@ describe("floorWindow / windowResetAt", () => {
     const now = Date.UTC(2026, 0, 15, 10, 30, 45, 123);
     const start = floorWindow(now, "day");
     expect(start).toBe(Date.UTC(2026, 0, 15, 0, 0, 0, 0));
-    expect(windowResetAt(start, "day")).toBe(
-      Date.UTC(2026, 0, 16, 0, 0, 0, 0),
-    );
+    expect(windowResetAt(start, "day")).toBe(Date.UTC(2026, 0, 16, 0, 0, 0, 0));
   });
 
   it("floors correctly across a UTC day boundary", () => {
@@ -129,7 +127,11 @@ describe("checkBudgets", () => {
 
   const cases: Array<{
     name: string;
-    usage: { dayUnits: number; projectMinuteUnits: number; minuteUnits: number };
+    usage: {
+      dayUnits: number;
+      projectMinuteUnits: number;
+      minuteUnits: number;
+    };
     units: number;
     expectedReason: "project_daily" | "project_minute" | "user_minute";
   }> = [
