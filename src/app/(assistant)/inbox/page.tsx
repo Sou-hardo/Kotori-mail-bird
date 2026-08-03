@@ -12,7 +12,9 @@ import { Icon } from "@/components/icons";
 
 type ConnectionSyncStatus = {
   status: string;
-  syncState: { lastCompletedAt?: number } | null;
+  // dto() converts epoch milliseconds to ISO strings at the Convex boundary,
+  // so this arrives as a string despite being v.number() in the schema.
+  syncState: { lastCompletedAt?: string } | null;
 };
 
 export default async function InboxPage({
