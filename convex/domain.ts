@@ -1,7 +1,15 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { dto, requirePrincipal } from "./principal";
+
+// Same shape as dto(gmailConnections row) but never carries the encrypted
+// refresh token to a client.
+export const connectionDto = (row: Doc<"gmailConnections">) => {
+  const { encryptedCredentials, ...rest } = row;
+  void encryptedCredentials;
+  return dto(rest);
+};
 
 export const currentPrincipal = query({
   args: { tenantId: v.optional(v.string()) },
@@ -149,7 +157,7 @@ export const getThread = query({
     return {
       ...dto(thread),
       messages: messages.map((m) => ({ ...dto(m), attachments: [] })),
-      gmailConnection: dto(connection),
+      gmailConnection: connectionDto(connection),
       summary: summary ? dto(summary) : null,
       classification: classification ? dto(classification) : null,
       replyGenerations: generation
@@ -348,7 +356,7 @@ export const getConnection = query({
       .query("syncStates")
       .withIndex("by_connection", (q) => q.eq("gmailConnectionId", row._id))
       .unique();
-    return { ...dto(row), syncState: sync ? dto(sync) : null };
+    return { ...connectionDto(row), syncState: sync ? dto(sync) : null };
   },
 });
 export const listConnections = query({
@@ -367,12 +375,8 @@ export const listConnections = query({
         .query("syncStates")
         .withIndex("by_connection", (q) => q.eq("gmailConnectionId", row._id))
         .unique();
-      // dto() passes encryptedCredentials through unchanged; strip it here
-      // since this response goes to the client.
-      const connection = dto(row) as Record<string, unknown>;
-      delete connection.encryptedCredentials;
       out.push({
-        ...connection,
+        ...connectionDto(row),
         syncState: sync ? dto(sync) : null,
       });
     }
