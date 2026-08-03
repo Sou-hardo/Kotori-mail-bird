@@ -2,6 +2,8 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import { computeInitialPhase } from "./gmailSync";
 export const connection = internalQuery({
   args: { connectionId: v.id("gmailConnections") },
   handler: (ctx, a) => ctx.db.get(a.connectionId),
@@ -21,8 +23,15 @@ export const syncContext = internalQuery({
   },
 });
 export const beginSync = internalMutation({
-  args: { connectionId: v.id("gmailConnections"), forceFull: v.boolean() },
-  handler: async (ctx, { connectionId, forceFull }) => {
+  args: {
+    connectionId: v.id("gmailConnections"),
+    forceFull: v.boolean(),
+    // Set when a run falls back from an expired history checkpoint (404) to
+    // a fresh backfill. Unlike forceFull it does not reset import counters,
+    // since the already-imported rows in Convex are still valid.
+    resetBackfill: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { connectionId, forceFull, resetBackfill }) => {
     const connection = await ctx.db.get(connectionId);
     if (!connection) throw new Error("connection_not_found");
     const state = await ctx.db
@@ -32,14 +41,29 @@ export const beginSync = internalMutation({
       )
       .unique();
     const now = Date.now();
-    if (state)
+    if (state) {
+      const reset = forceFull || Boolean(resetBackfill);
+      const phase = computeInitialPhase(reset ? null : state);
       await ctx.db.patch(state._id, {
         status: "RUNNING",
         lastStartedAt: now,
         lastError: undefined,
+        resumeAt: undefined,
+        phase,
         ...(forceFull ? { pageToken: undefined } : {}),
+        ...(reset
+          ? {
+              backfillPageToken: undefined,
+              backfillDone: false,
+              totalThreads: undefined,
+              totalMessages: undefined,
+              historyId: undefined,
+            }
+          : {}),
+        ...(forceFull ? { importedThreads: 0, importedMessages: 0 } : {}),
         updatedAt: now,
       });
+    }
     await ctx.db.insert("auditEvents", {
       tenantId: connection.tenantId,
       action: "SYNC_STARTED",
@@ -66,12 +90,13 @@ export const failSync = internalMutation({
       });
   },
 });
-export const syncProgress = internalMutation({
+export const pauseSync = internalMutation({
   args: {
     connectionId: v.id("gmailConnections"),
-    pageToken: v.optional(v.string()),
+    resumeAt: v.number(),
+    error: v.optional(v.string()),
   },
-  handler: async (ctx, { connectionId, pageToken }) => {
+  handler: async (ctx, { connectionId, resumeAt, error }) => {
     const state = await ctx.db
       .query("syncStates")
       .withIndex("by_connection", (q) =>
@@ -79,7 +104,47 @@ export const syncProgress = internalMutation({
       )
       .unique();
     if (state)
-      await ctx.db.patch(state._id, { pageToken, updatedAt: Date.now() });
+      await ctx.db.patch(state._id, {
+        status: "QUOTA_PAUSED",
+        phase: "QUOTA_PAUSED",
+        resumeAt,
+        ...(error !== undefined ? { lastError: error.slice(0, 2000) } : {}),
+        updatedAt: Date.now(),
+      });
+  },
+});
+// Widened to also carry backfill progress: page cursor, phase, one-time
+// mailbox totals from getProfile, and (optionally) the very first history
+// checkpoint. historyIdIfUnset only ever writes historyId when the state
+// doesn't already have one, so a resumed backfill never clobbers the
+// checkpoint captured at the start of the current backfill pass.
+export const syncProgress = internalMutation({
+  args: {
+    connectionId: v.id("gmailConnections"),
+    pageToken: v.optional(v.string()),
+    backfillPageToken: v.optional(v.string()),
+    phase: v.optional(v.string()),
+    totalThreads: v.optional(v.number()),
+    totalMessages: v.optional(v.number()),
+    historyIdIfUnset: v.optional(v.string()),
+  },
+  handler: async (ctx, a) => {
+    const state = await ctx.db
+      .query("syncStates")
+      .withIndex("by_connection", (q) =>
+        q.eq("gmailConnectionId", a.connectionId),
+      )
+      .unique();
+    if (!state) return;
+    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+    if ("pageToken" in a) patch.pageToken = a.pageToken;
+    if ("backfillPageToken" in a) patch.backfillPageToken = a.backfillPageToken;
+    if (a.phase !== undefined) patch.phase = a.phase;
+    if (a.totalThreads !== undefined) patch.totalThreads = a.totalThreads;
+    if (a.totalMessages !== undefined) patch.totalMessages = a.totalMessages;
+    if (a.historyIdIfUnset !== undefined && state.historyId === undefined)
+      patch.historyId = a.historyIdIfUnset;
+    await ctx.db.patch(state._id, patch);
   },
 });
 const header = (headers: any[], name: string) =>
@@ -94,6 +159,10 @@ const bodyText = (payload: any): string | undefined => {
   }
   return undefined;
 };
+// Full thread-shape upsert. No longer called from the sync loop (both the
+// incremental and backfill paths are message-granular now, see
+// saveMessage), but kept as the reference implementation for a genuine full
+// thread refetch and for its recursive body/attachment walk + prune logic.
 export const saveThread = internalMutation({
   args: { connectionId: v.id("gmailConnections"), thread: v.any() },
   handler: async (ctx, { connectionId, thread }) => {
@@ -126,6 +195,7 @@ export const saveThread = internalMutation({
       ) as string[],
       updatedAt: now,
     };
+    let threadInserted = false;
     if (row) await ctx.db.patch(row._id, data);
     else {
       const id = await ctx.db.insert("emailThreads", {
@@ -133,7 +203,9 @@ export const saveThread = internalMutation({
         createdAt: now,
       });
       row = (await ctx.db.get(id))!;
+      threadInserted = true;
     }
+    let messagesInserted = 0;
     for (const m of messages) {
       if (!m.id) continue;
       const old = await ctx.db
@@ -162,11 +234,13 @@ export const saveThread = internalMutation({
       if (old) {
         await ctx.db.patch(old._id, messageData);
         messageId = old._id;
-      } else
+      } else {
         messageId = await ctx.db.insert("emailMessages", {
           ...messageData,
           createdAt: now,
         });
+        messagesInserted++;
+      }
       const attachmentIds = new Set<string>();
       const walk = async (payload: any) => {
         if (payload?.body?.attachmentId) {
@@ -215,6 +289,11 @@ export const saveThread = internalMutation({
           await ctx.db.delete(attachment._id);
         await ctx.db.delete(old._id);
       }
+    if (threadInserted || messagesInserted)
+      await incrementImportCounters(ctx, connectionId, {
+        threads: threadInserted ? 1 : 0,
+        messages: messagesInserted,
+      });
     await ctx.scheduler.runAfter(0, internal.jobs.enqueueInternal, {
       tenantId: c.tenantId,
       kind: "ai.thread.analyze",
@@ -224,10 +303,173 @@ export const saveThread = internalMutation({
     return row._id;
   },
 });
+async function incrementImportCounters(
+  ctx: { db: any },
+  connectionId: Id<"gmailConnections">,
+  delta: { threads: number; messages: number },
+) {
+  const state = await ctx.db
+    .query("syncStates")
+    .withIndex("by_connection", (q: any) =>
+      q.eq("gmailConnectionId", connectionId),
+    )
+    .unique();
+  if (!state) return;
+  await ctx.db.patch(state._id, {
+    importedThreads: (state.importedThreads ?? 0) + delta.threads,
+    importedMessages: (state.importedMessages ?? 0) + delta.messages,
+    updatedAt: Date.now(),
+  });
+}
+// Message-granular upsert used by both the incremental (history.list) and
+// backfill (messages.list) paths. Only ever touches the one message it was
+// given: it never prunes sibling messages from the thread, because a
+// partial message fetch has no way to know the thread's full membership
+// (that pruning only ever ran off a full threads.get, which neither sync
+// path calls anymore).
+export const saveMessage = internalMutation({
+  args: {
+    connectionId: v.id("gmailConnections"),
+    gmailThreadId: v.string(),
+    message: v.any(),
+  },
+  handler: async (ctx, { connectionId, gmailThreadId, message }) => {
+    const c = await ctx.db.get(connectionId);
+    if (!c) throw new Error("connection_not_found");
+    const now = Date.now();
+    let thread = await ctx.db
+      .query("emailThreads")
+      .withIndex("by_connection_gmail", (q) =>
+        q
+          .eq("gmailConnectionId", connectionId)
+          .eq("gmailThreadId", gmailThreadId),
+      )
+      .unique();
+    const sentAt = Number(message.internalDate) || now;
+    const isUnreadMsg = (message.labelIds ?? []).includes("UNREAD");
+    const msgLabelIds: string[] = message.labelIds ?? [];
+    const subject = header(message.payload?.headers, "Subject");
+    let threadInserted = false;
+    let latestMessageAt: number;
+    if (!thread) {
+      latestMessageAt = sentAt;
+      const id = await ctx.db.insert("emailThreads", {
+        tenantId: c.tenantId,
+        gmailConnectionId: connectionId,
+        gmailThreadId,
+        subject,
+        snippet: message.snippet,
+        latestMessageAt,
+        isUnread: isUnreadMsg,
+        labelIds: msgLabelIds,
+        createdAt: now,
+        updatedAt: now,
+      });
+      thread = (await ctx.db.get(id))!;
+      threadInserted = true;
+    } else {
+      latestMessageAt = Math.max(thread.latestMessageAt, sentAt);
+      const patch: Record<string, unknown> = {
+        updatedAt: now,
+        isUnread: thread.isUnread || isUnreadMsg,
+        labelIds: Array.from(new Set([...thread.labelIds, ...msgLabelIds])),
+      };
+      if (sentAt >= thread.latestMessageAt) {
+        patch.latestMessageAt = sentAt;
+        patch.snippet = message.snippet;
+        if (subject) patch.subject = subject;
+      }
+      await ctx.db.patch(thread._id, patch);
+    }
+    const old = await ctx.db
+      .query("emailMessages")
+      .withIndex("by_thread_gmail", (q) =>
+        q.eq("threadId", thread!._id).eq("gmailMessageId", message.id),
+      )
+      .unique();
+    const messageData = {
+      threadId: thread._id,
+      gmailMessageId: message.id,
+      internetMessageId: header(message.payload?.headers, "Message-ID"),
+      fromAddress: header(message.payload?.headers, "From") ?? "",
+      toAddresses: (header(message.payload?.headers, "To") ?? "")
+        .split(",")
+        .filter(Boolean),
+      ccAddresses: (header(message.payload?.headers, "Cc") ?? "")
+        .split(",")
+        .filter(Boolean),
+      sentAt,
+      snippet: message.snippet,
+      bodyText: bodyText(message.payload),
+      headers: message.payload?.headers,
+    };
+    let messageId;
+    let messageInserted = false;
+    if (old) {
+      await ctx.db.patch(old._id, messageData);
+      messageId = old._id;
+    } else {
+      messageId = await ctx.db.insert("emailMessages", {
+        ...messageData,
+        createdAt: now,
+      });
+      messageInserted = true;
+    }
+    const attachmentIds = new Set<string>();
+    const walk = async (payload: any) => {
+      if (payload?.body?.attachmentId) {
+        attachmentIds.add(payload.body.attachmentId);
+        const existing = await ctx.db
+          .query("attachments")
+          .withIndex("by_message_gmail", (q) =>
+            q
+              .eq("messageId", messageId)
+              .eq("gmailAttachmentId", payload.body.attachmentId),
+          )
+          .unique();
+        const attachment = {
+          messageId,
+          gmailAttachmentId: payload.body.attachmentId,
+          filename: payload.filename || undefined,
+          mimeType: payload.mimeType ?? "application/octet-stream",
+          sizeBytes: Number(payload.body.size) || 0,
+          contentId: header(payload.headers, "Content-ID"),
+        };
+        if (existing) await ctx.db.patch(existing._id, attachment);
+        else await ctx.db.insert("attachments", attachment);
+      }
+      for (const part of payload?.parts ?? []) await walk(part);
+    };
+    await walk(message.payload);
+    for (const attachment of await ctx.db
+      .query("attachments")
+      .withIndex("by_message_gmail", (q) => q.eq("messageId", messageId))
+      .collect())
+      if (!attachmentIds.has(attachment.gmailAttachmentId))
+        await ctx.db.delete(attachment._id);
+
+    if (threadInserted || messageInserted)
+      await incrementImportCounters(ctx, connectionId, {
+        threads: threadInserted ? 1 : 0,
+        messages: messageInserted ? 1 : 0,
+      });
+
+    await ctx.scheduler.runAfter(0, internal.jobs.enqueueInternal, {
+      tenantId: c.tenantId,
+      kind: "ai.thread.analyze",
+      input: { threadId: thread._id, version: String(latestMessageAt) },
+      dedupeKey: `${thread._id}:${latestMessageAt}`,
+    });
+    return thread._id;
+  },
+});
 export const finishSync = internalMutation({
   args: {
     connectionId: v.id("gmailConnections"),
     historyId: v.optional(v.string()),
+    // Only present on a backfill-path run; reflects whether Gmail returned
+    // no nextPageToken for that run's final page.
+    backfillDone: v.optional(v.boolean()),
   },
   handler: async (ctx, a) => {
     const s = await ctx.db
@@ -236,14 +478,20 @@ export const finishSync = internalMutation({
         q.eq("gmailConnectionId", a.connectionId),
       )
       .unique();
-    if (s)
+    if (s) {
+      const backfillDone = a.backfillDone ?? s.backfillDone ?? false;
       await ctx.db.patch(s._id, {
         status: "IDLE",
-        historyId: a.historyId,
+        ...(a.historyId !== undefined ? { historyId: a.historyId } : {}),
+        ...(a.backfillDone !== undefined
+          ? { backfillDone: a.backfillDone }
+          : {}),
         pageToken: undefined,
+        phase: backfillDone ? "INCREMENTAL" : "BACKFILL",
         lastCompletedAt: Date.now(),
         updatedAt: Date.now(),
       });
+    }
     const connection = await ctx.db.get(a.connectionId);
     if (connection)
       await ctx.db.insert("auditEvents", {
@@ -261,28 +509,23 @@ export const deleteGmailMessages = internalMutation({
     gmailMessageIds: v.array(v.string()),
   },
   handler: async (ctx, { connectionId, gmailMessageIds }) => {
-    const threads = await ctx.db
-      .query("emailThreads")
-      .withIndex("by_connection_gmail", (q) =>
-        q.eq("gmailConnectionId", connectionId),
-      )
-      .collect();
-    const wanted = new Set(gmailMessageIds);
-    for (const thread of threads)
-      for (const message of await ctx.db
+    for (const gmailMessageId of gmailMessageIds) {
+      const message = await ctx.db
         .query("emailMessages")
-        .withIndex("by_thread_sent", (q) => q.eq("threadId", thread._id))
+        .withIndex("by_gmail_message", (q) =>
+          q.eq("gmailMessageId", gmailMessageId),
+        )
+        .unique();
+      if (!message) continue;
+      const thread = await ctx.db.get(message.threadId);
+      if (!thread || thread.gmailConnectionId !== connectionId) continue;
+      for (const attachment of await ctx.db
+        .query("attachments")
+        .withIndex("by_message_gmail", (q) => q.eq("messageId", message._id))
         .collect())
-        if (wanted.has(message.gmailMessageId)) {
-          for (const attachment of await ctx.db
-            .query("attachments")
-            .withIndex("by_message_gmail", (q) =>
-              q.eq("messageId", message._id),
-            )
-            .collect())
-            await ctx.db.delete(attachment._id);
-          await ctx.db.delete(message._id);
-        }
+        await ctx.db.delete(attachment._id);
+      await ctx.db.delete(message._id);
+    }
   },
 });
 export const draftContext = internalQuery({

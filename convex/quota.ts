@@ -241,36 +241,41 @@ export const reserve = internalMutation({
   },
 });
 
+export async function readUsage(
+  ctx: QueryCtx,
+  connectionId: Id<"gmailConnections">,
+) {
+  const now = Date.now();
+  const dayWindowStart = floorWindow(now, "day");
+  const minuteWindowStart = floorWindow(now, "minute");
+  const connectionScope = String(connectionId);
+  const budgets = resolveBudgets(process.env);
+
+  const [dayRow, projectMinuteRow, userMinuteRow] = await Promise.all([
+    getWindowRow(ctx, PROJECT_SCOPE, "day", dayWindowStart),
+    getWindowRow(ctx, PROJECT_SCOPE, "minute", minuteWindowStart),
+    getWindowRow(ctx, connectionScope, "minute", minuteWindowStart),
+  ]);
+
+  const dayUnits = dayRow?.units ?? 0;
+  const dayBudget = budgets.dailyBudget;
+  const dayPercent =
+    dayBudget === 0 ? 0 : Math.round((dayUnits / dayBudget) * 1000) / 10;
+
+  return {
+    dayUnits,
+    dayBudget,
+    dayPercent,
+    minuteUnits: userMinuteRow?.units ?? 0,
+    minuteBudget: budgets.userMinuteBudget,
+    projectMinuteUnits: projectMinuteRow?.units ?? 0,
+    projectMinuteBudget: budgets.projectMinuteBudget,
+  };
+}
+
 export const usage = internalQuery({
   args: { connectionId: v.id("gmailConnections") },
-  handler: async (ctx, { connectionId }) => {
-    const now = Date.now();
-    const dayWindowStart = floorWindow(now, "day");
-    const minuteWindowStart = floorWindow(now, "minute");
-    const connectionScope = String(connectionId);
-    const budgets = resolveBudgets(process.env);
-
-    const [dayRow, projectMinuteRow, userMinuteRow] = await Promise.all([
-      getWindowRow(ctx, PROJECT_SCOPE, "day", dayWindowStart),
-      getWindowRow(ctx, PROJECT_SCOPE, "minute", minuteWindowStart),
-      getWindowRow(ctx, connectionScope, "minute", minuteWindowStart),
-    ]);
-
-    const dayUnits = dayRow?.units ?? 0;
-    const dayBudget = budgets.dailyBudget;
-    const dayPercent =
-      dayBudget === 0 ? 0 : Math.round((dayUnits / dayBudget) * 1000) / 10;
-
-    return {
-      dayUnits,
-      dayBudget,
-      dayPercent,
-      minuteUnits: userMinuteRow?.units ?? 0,
-      minuteBudget: budgets.userMinuteBudget,
-      projectMinuteUnits: projectMinuteRow?.units ?? 0,
-      projectMinuteBudget: budgets.projectMinuteBudget,
-    };
-  },
+  handler: async (ctx, { connectionId }) => readUsage(ctx, connectionId),
 });
 
 export const prune = internalMutation({
