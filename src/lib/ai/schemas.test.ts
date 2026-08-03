@@ -86,8 +86,8 @@ describe("versioned AI schemas", () => {
 
   it("keeps suggestion count out of reply requests", () => {
     const request = {
-      threadId: "cm0000000000000000000001",
-      identityId: "cm0000000000000000000002",
+      threadId: "jd7bmxq1k5g9v9dqbe0kwv6crx6y4qsg",
+      identityId: "kg2c4nrq6f9x2s0v7de1twy8p3m5z6vh",
       intent: "Confirm receipt",
       tone: "Professional",
       length: "short",
@@ -97,6 +97,24 @@ describe("versioned AI schemas", () => {
     expect(replyRequestSchema.safeParse({ ...request, count: 3 }).success).toBe(
       false,
     );
+  });
+
+  it("rejects malformed Convex ids", () => {
+    const request = {
+      threadId: "jd7bmxq1k5g9v9dqbe0kwv6crx6y4qsg",
+      identityId: "kg2c4nrq6f9x2s0v7de1twy8p3m5z6vh",
+      intent: "Confirm receipt",
+      tone: "Professional",
+      length: "short",
+      acknowledgements: [],
+    };
+    expect(
+      replyRequestSchema.safeParse({ ...request, threadId: "" }).success,
+    ).toBe(false);
+    expect(
+      replyRequestSchema.safeParse({ ...request, threadId: "not an id!" })
+        .success,
+    ).toBe(false);
   });
 
   it("accepts only the explicit reply preference shape", () => {

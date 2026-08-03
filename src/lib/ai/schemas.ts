@@ -5,6 +5,15 @@ export const AI_SCHEMA_VERSION = "2026-08-01.v1";
 const boundedText = z.string().trim().min(1).max(4_000);
 const boundedList = z.array(boundedText.max(500)).max(25);
 
+// Convex document IDs are opaque base32-ish strings, not CUIDs — validate shape only,
+// ownership/existence is checked against the tenant-scoped Convex tables downstream.
+export const convexIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9]+$/, "Invalid id");
+
 export const analysisSchema = z
   .object({
     schemaVersion: z.literal(AI_SCHEMA_VERSION),
@@ -33,7 +42,7 @@ export const analysisSchema = z
 
 export const replyRequestSchema = z
   .object({
-    threadId: z.string().cuid(),
+    threadId: convexIdSchema,
     intent: z.string().trim().min(1).max(200),
     tone: z.enum([
       "Professional",
@@ -44,7 +53,7 @@ export const replyRequestSchema = z
       "Academic",
     ]),
     length: z.enum(["short", "standard", "detailed"]),
-    identityId: z.string().cuid(),
+    identityId: convexIdSchema,
     acknowledgements: z.array(z.string()).max(20).default([]),
   })
   .strict();

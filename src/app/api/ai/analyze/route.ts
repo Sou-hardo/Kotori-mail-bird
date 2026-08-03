@@ -1,13 +1,23 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
-import { analysisSchema } from "@/lib/ai/schemas";
+import { z, ZodError } from "zod";
+import { analysisSchema, convexIdSchema } from "@/lib/ai/schemas";
 import { fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server";
 import { convexApi } from "@/lib/convex-api";
 
-const requestSchema = z.object({ threadId: z.string().cuid() }).strict();
+const requestSchema = z.object({ threadId: convexIdSchema }).strict();
 
 export async function POST(request: Request) {
-  const { threadId } = requestSchema.parse(await request.json());
+  let threadId;
+  try {
+    ({ threadId } = requestSchema.parse(await request.json()));
+  } catch (error) {
+    if (error instanceof ZodError)
+      return NextResponse.json(
+        { error: "invalid_request", issues: error.issues },
+        { status: 400 },
+      );
+    throw error;
+  }
   const job = await fetchAuthMutation(convexApi.jobs.enqueue, {
     kind: "ai.thread.analyze",
     input: { threadId, version: "manual" },
