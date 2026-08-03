@@ -808,3 +808,13 @@ svg {
     animation: none !important;
   }
 }
+
+.banner {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 14px;
+}
