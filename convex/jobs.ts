@@ -432,16 +432,15 @@ export const status = query({
     const jobs = (
       await ctx.db
         .query("processingJobs")
-        .withIndex("by_tenant_kind_dedupe", (q) =>
+        .withIndex("by_tenant_kind_created", (q) =>
           q.eq("tenantId", tenantId).eq("kind", "gmail.sync"),
         )
         .order("desc")
-        .take(20)
+        .take(200)
     )
       .filter((j) => (j.input as any)?.connectionId === connectionId)
       .slice(0, 10);
     return {
-      connection: dto(connection),
       sync: sync ? dto(sync) : null,
       jobs: jobs.map(dto),
     };

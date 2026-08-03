@@ -283,6 +283,7 @@ export default defineSchema({
     ...timestamps,
   })
     .index("by_tenant_kind_dedupe", ["tenantId", "kind", "dedupeKey"])
+    .index("by_tenant_kind_created", ["tenantId", "kind", "createdAt"])
     .index("by_status_scheduled", ["status", "scheduledAt"])
     .index("by_completed", ["completedAt"]),
   auditEvents: defineTable({
