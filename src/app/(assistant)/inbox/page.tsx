@@ -10,18 +10,34 @@ import {
 } from "@/lib/ui";
 import { Icon } from "@/components/icons";
 
+type ConnectionSyncStatus = {
+  status: string;
+  syncState: { lastCompletedAt?: number } | null;
+};
+
 export default async function InboxPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; filter?: string }>;
+  searchParams: Promise<{ q?: string; filter?: string; gmail?: string }>;
 }) {
-  const { q, filter } = await searchParams;
-  const threads = await fetchAuthQuery(convexApi.domain.listInbox, {
-    q,
-    filter,
-  });
+  const { q, filter, gmail } = await searchParams;
+  const [threads, connections] = await Promise.all([
+    fetchAuthQuery(convexApi.domain.listInbox, { q, filter }),
+    fetchAuthQuery(
+      convexApi.domain.listConnections,
+      {},
+    ) as Promise<unknown> as Promise<ConnectionSyncStatus[]>,
+  ]);
+  const activeConnection = connections.find((c) => c.status === "ACTIVE");
+  const firstSyncPending =
+    !!activeConnection && !activeConnection.syncState?.lastCompletedAt;
   return (
     <div className="page-wrap">
+      {gmail === "connected" ? (
+        <p className="banner" role="status">
+          Gmail connected. Kotori is syncing your inbox now.
+        </p>
+      ) : null}
       <header className="page-header">
         <div>
           <p className="eyebrow">Good morning</p>
@@ -105,8 +121,20 @@ export default async function InboxPage({
           ) : (
             <div className="empty">
               <span>✓</span>
-              <h2>You’re all caught up</h2>
-              <p>No messages match this view.</p>
+              {firstSyncPending ? (
+                <>
+                  <h2>First sync in progress</h2>
+                  <p>
+                    Kotori is importing your mailbox. This can take a few
+                    minutes.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h2>You’re all caught up</h2>
+                  <p>No messages match this view.</p>
+                </>
+              )}
             </div>
           )}
         </div>
