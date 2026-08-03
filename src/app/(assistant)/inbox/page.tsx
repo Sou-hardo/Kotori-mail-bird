@@ -9,12 +9,28 @@ import {
   urgencyLabel,
 } from "@/lib/ui";
 import { Icon } from "@/components/icons";
+import { SyncProgress } from "@/components/sync-progress";
 
 type ConnectionSyncStatus = {
+  id: string;
   status: string;
   // dto() converts epoch milliseconds to ISO strings at the Convex boundary,
   // so this arrives as a string despite being v.number() in the schema.
   syncState: { lastCompletedAt?: string } | null;
+};
+
+type SyncStatusResponse = {
+  syncState: {
+    status?: string;
+    phase?: string;
+    totalThreads?: number;
+    importedThreads?: number;
+    totalMessages?: number;
+    importedMessages?: number;
+    backfillDone?: boolean;
+    resumeAt?: number;
+  } | null;
+  quota: { dayUnits: number; dayBudget: number; dayPercent: number } | null;
 };
 
 export default async function InboxPage({
@@ -31,14 +47,33 @@ export default async function InboxPage({
     ) as Promise<unknown> as Promise<ConnectionSyncStatus[]>,
   ]);
   const activeConnection = connections.find((c) => c.status === "ACTIVE");
-  const firstSyncPending =
-    !!activeConnection && !activeConnection.syncState?.lastCompletedAt;
+  const syncStatus = activeConnection
+    ? ((await fetchAuthQuery(convexApi.jobs.status, {
+        connectionId: activeConnection.id,
+      })) as unknown as SyncStatusResponse)
+    : null;
+  const backfillDone = syncStatus?.syncState?.backfillDone ?? false;
+  const firstSyncPending = !!activeConnection && backfillDone !== true;
   return (
     <div className="page-wrap">
       {gmail === "connected" ? (
         <p className="banner" role="status">
           Gmail connected. Kotori is syncing your inbox now.
         </p>
+      ) : null}
+      {firstSyncPending ? (
+        <div className="banner">
+          <SyncProgress
+            compact
+            phase={syncStatus?.syncState?.phase}
+            status={syncStatus?.syncState?.status}
+            totalThreads={syncStatus?.syncState?.totalThreads}
+            importedThreads={syncStatus?.syncState?.importedThreads}
+            totalMessages={syncStatus?.syncState?.totalMessages}
+            importedMessages={syncStatus?.syncState?.importedMessages}
+            resumeAt={syncStatus?.syncState?.resumeAt}
+          />
+        </div>
       ) : null}
       <header className="page-header">
         <div>
@@ -126,10 +161,7 @@ export default async function InboxPage({
               {firstSyncPending ? (
                 <>
                   <h2>First sync in progress</h2>
-                  <p>
-                    Kotori is importing your mailbox. This can take a few
-                    minutes.
-                  </p>
+                  <p>Progress is shown above. This can take a few minutes.</p>
                 </>
               ) : (
                 <>
