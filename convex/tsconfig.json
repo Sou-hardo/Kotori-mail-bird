@@ -12,6 +12,11 @@
     "skipLibCheck": true,
     "allowSyntheticDefaultImports": true,
 
+    /* Convex functions import helpers out of ../src, and those files use the
+     * app's "@/" alias internally. Without this mapping `convex dev` and
+     * `convex deploy` fail their typecheck on imports the app resolves fine. */
+    "paths": { "@/*": ["../src/*"] },
+
     /* These compiler options are required by Convex. */
     "target": "ESNext",
     "lib": ["ES2023", "dom"],

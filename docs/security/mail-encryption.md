@@ -116,8 +116,15 @@ never subject lines, addresses, or message bodies.
 Two audit payloads did carry mail-derived values before this change and were
 narrowed rather than encrypted, in `convex/domain.ts` `replyAction`: the
 recipient list is now recorded as `recipientCount`, and a rejection reason as
-`reasonLength`. `emailMessages.bodyHtml` was dropped from the schema entirely
-— nothing ever wrote or read it.
+`reasonLength`.
+
+Two `emailMessages` columns were dropped rather than encrypted. `bodyHtml`
+was never written or read. `internetMessageId` duplicated the RFC822
+`Message-ID` that is already inside the encrypted `headers` blob, was never
+read either, and in the clear it leaked the sending domain (e.g.
+`<...@ltx1-app84070.prod.linkedin.com>`). `convex/access.test.ts` now asserts
+that every string field on a stored message is either ciphertext or a Gmail
+id, so a new plaintext column cannot be added without a failing test.
 
 ## Threat model
 

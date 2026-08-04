@@ -209,6 +209,16 @@ describe("ciphertext at rest", () => {
       rows.messages[0]!.toAddresses,
     ])
       expect(ciphertext).toMatch(/^v1:/);
+
+    // Every string field on a stored message must be ciphertext or a Gmail
+    // id -- this is what catches a new plaintext column being added later,
+    // the way internetMessageId originally slipped through.
+    for (const [key, value] of Object.entries(rows.messages[0]!))
+      if (typeof value === "string" && key !== "_id")
+        expect(
+          value.startsWith("v1:") ||
+            ["gmailMessageId", "threadId"].includes(key),
+        ).toBe(true);
   });
 
   it("round-trips back to the original mail through the mailbox key", async () => {
