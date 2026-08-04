@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { getServerEnv } from "@/lib/env";
 import { sanitizeJsonStrings } from "@/lib/ai/sanitize";
 
 const responseSchema = z.object({
@@ -26,15 +25,18 @@ export async function deepSeekJson<T>(
   schema: z.ZodType<T>,
   fetcher: typeof fetch = fetch,
 ): Promise<T> {
-  const env = getServerEnv();
-  const response = await fetcher(`${env.DEEPSEEK_BASE_URL}/chat/completions`, {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) throw new AiResponseError("DEEPSEEK_API_KEY is not set");
+  const baseUrl = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com";
+  const model = process.env.DEEPSEEK_MODEL ?? "deepseek-chat";
+  const response = await fetcher(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${env.DEEPSEEK_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: env.DEEPSEEK_MODEL,
+      model,
       response_format: { type: "json_object" },
       temperature: 0.2,
       messages: [

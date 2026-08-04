@@ -1,8 +1,8 @@
 import { fetchAuthQuery } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../convex/_generated/api";
 import { ReminderManager } from "@/components/reminder-manager";
 export default async function FollowUpsPage() {
-  const items = await fetchAuthQuery(convexApi.domain.listReminders, {});
+  const items = await fetchAuthQuery(api.domain.listReminders, {});
   return (
     <div className="page-wrap">
       <header className="page-header">

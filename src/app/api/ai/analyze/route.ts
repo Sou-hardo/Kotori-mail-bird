@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { analysisSchema, convexIdSchema } from "@/lib/ai/schemas";
 import { fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../../convex/_generated/api";
 
 const requestSchema = z.object({ threadId: convexIdSchema }).strict();
 
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
       );
     throw error;
   }
-  const job = await fetchAuthMutation(convexApi.jobs.enqueue, {
+  const job = await fetchAuthMutation(api.jobs.enqueue, {
     kind: "ai.thread.analyze",
     input: { threadId, version: "manual" },
     dedupeKey: `${threadId}:manual`,
@@ -33,15 +33,18 @@ export async function GET(request: Request) {
   const threadId = new URL(request.url).searchParams.get("threadId");
   if (!threadId)
     return NextResponse.json({ error: "threadId required" }, { status: 400 });
-  const row = await fetchAuthQuery(convexApi.domain.latestAnalysis, {
+  const row = await fetchAuthQuery(api.domain.latestAnalysis, {
     threadId,
   });
   if (!row)
     return NextResponse.json({ error: "analysis not found" }, { status: 404 });
+  // Rows written before the analysisSchema rewire don't match the current
+  // shape; fall back to the stored value as-is instead of 500ing old threads.
+  const parsed = analysisSchema.safeParse(row.analysis);
   return NextResponse.json({
     id: row.id,
     createdAt: row.createdAt,
-    analysis: analysisSchema.parse(row.analysis),
+    analysis: parsed.success ? parsed.data : row.analysis,
     safetyFlags: row.safetyFlags,
   });
 }

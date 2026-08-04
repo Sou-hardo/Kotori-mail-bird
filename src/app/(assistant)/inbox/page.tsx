@@ -1,7 +1,7 @@
 import Link from "next/link";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { fetchAuthQuery } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../convex/_generated/api";
 import {
   confidenceLabel,
   initials,
@@ -40,15 +40,15 @@ export default async function InboxPage({
 }) {
   const { q, filter, gmail } = await searchParams;
   const [threads, connections] = await Promise.all([
-    fetchAuthQuery(convexApi.domain.listInbox, { q, filter }),
+    fetchAuthQuery(api.domain.listInbox, { q, filter }),
     fetchAuthQuery(
-      convexApi.domain.listConnections,
+      api.domain.listConnections,
       {},
     ) as Promise<unknown> as Promise<ConnectionSyncStatus[]>,
   ]);
   const activeConnection = connections.find((c) => c.status === "ACTIVE");
   const syncStatus = activeConnection
-    ? ((await fetchAuthQuery(convexApi.jobs.status, {
+    ? ((await fetchAuthQuery(api.jobs.status, {
         connectionId: activeConnection.id,
       })) as unknown as SyncStatusResponse)
     : null;

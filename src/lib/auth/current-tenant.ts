@@ -1,6 +1,6 @@
 import { fetchAuthQuery } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../convex/_generated/api";
 
 export async function requireCurrentTenant(tenantId?: string) {
-  return fetchAuthQuery(convexApi.domain.currentPrincipal, { tenantId });
+  return fetchAuthQuery(api.domain.currentPrincipal, { tenantId });
 }

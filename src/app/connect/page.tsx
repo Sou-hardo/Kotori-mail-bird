@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { isAuthenticated, fetchAuthQuery } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../convex/_generated/api";
 import { ConnectPanel } from "@/components/connect-panel";
 
 type ConnectionStatus = { status: string };
@@ -13,7 +13,7 @@ export default async function ConnectPage({
   if (!(await isAuthenticated())) redirect("/sign-in");
   const { error } = await searchParams;
   const connections = (await fetchAuthQuery(
-    convexApi.domain.listConnections,
+    api.domain.listConnections,
     {},
   )) as unknown as ConnectionStatus[];
   if (connections.some((c) => c.status === "ACTIVE")) redirect("/inbox");

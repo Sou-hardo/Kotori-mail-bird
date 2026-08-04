@@ -112,12 +112,17 @@ function outputSchemaFor(count: ReplySuggestionCount) {
 export const replyOutputSchemaFor = (count: ReplySuggestionCount) =>
   outputSchemaFor(count);
 
-export const replyOutputSchema = z.union([
-  outputSchemaFor(1),
-  outputSchemaFor(3),
-]);
+export function draftsToOptions(
+  drafts: Array<{ label: string; body: string }>,
+  fallbackTone: string,
+) {
+  return drafts.map((draft) => ({
+    tone: draft.label || fallbackTone,
+    body: draft.body,
+  }));
+}
 
 export type ThreadAnalysisResult = z.infer<typeof analysisSchema>;
 export type ReplyRequest = z.infer<typeof replyRequestSchema>;
-export type ReplyOutput = z.infer<typeof replyOutputSchema>;
+export type ReplyOutput = z.infer<ReturnType<typeof replyOutputSchemaFor>>;
 export type ReplyPreference = z.infer<typeof replyPreferenceSchema>;

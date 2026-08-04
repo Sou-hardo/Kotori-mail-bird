@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { fetchAuthMutation } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../../convex/_generated/api";
 export async function PATCH(
   r: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -15,7 +15,7 @@ export async function PATCH(
       status: z.enum(["OPEN", "SNOOZED", "DONE"]).optional(),
     })
     .parse(await r.json());
-  const reminder = await fetchAuthMutation(convexApi.jobs.saveReminder, {
+  const reminder = await fetchAuthMutation(api.jobs.saveReminder, {
     id,
     input: {
       ...input,
@@ -29,6 +29,6 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  await fetchAuthMutation(convexApi.jobs.deleteReminder, { id });
+  await fetchAuthMutation(api.jobs.deleteReminder, { id });
   return new NextResponse(null, { status: 204 });
 }

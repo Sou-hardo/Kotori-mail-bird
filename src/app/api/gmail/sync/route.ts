@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../../convex/_generated/api";
 
 export async function POST(request: Request) {
   const { connectionId, full = false } = (await request.json()) as {
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   const bucket = full ? "initial" : String(Math.floor(Date.now() / 300_000));
-  const job = await fetchAuthMutation(convexApi.jobs.enqueue, {
+  const job = await fetchAuthMutation(api.jobs.enqueue, {
     kind: "gmail.sync",
     input: { connectionId, forceFull: full },
     dedupeKey: `${connectionId}:${bucket}`,
@@ -32,6 +32,6 @@ export async function GET(request: Request) {
       { status: 400 },
     );
   return NextResponse.json(
-    await fetchAuthQuery(convexApi.jobs.status, { connectionId }),
+    await fetchAuthQuery(api.jobs.status, { connectionId }),
   );
 }

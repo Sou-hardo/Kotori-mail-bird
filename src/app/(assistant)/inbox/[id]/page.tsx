@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import Link from "next/link";
 import { fetchAuthQuery } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../../convex/_generated/api";
 import { ReplyComposer } from "@/components/reply-composer";
 
 export default async function ThreadPage({
@@ -12,8 +12,8 @@ export default async function ThreadPage({
 }) {
   const { id } = await params;
   const [thread, replyPreference] = await Promise.all([
-    fetchAuthQuery(convexApi.domain.getThread, { id }),
-    fetchAuthQuery(convexApi.domain.getReplyPreference, {}),
+    fetchAuthQuery(api.domain.getThread, { id }),
+    fetchAuthQuery(api.domain.getReplyPreference, {}),
   ]);
   if (!thread) notFound();
   const identities = thread.identities;

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { REVIEW_FLAGS, detectReviewFlags } from "@/lib/ai/safety";
 import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../../../convex/_generated/api";
 import { latestInbound, replyAllRecipients } from "@/lib/gmail/recipients";
 
 const actionSchema = z.discriminatedUnion("action", [
@@ -31,10 +31,10 @@ export async function PATCH(
 ) {
   const { id } = await context.params;
   const input = actionSchema.parse(await request.json());
-  const inbox = await fetchAuthQuery(convexApi.domain.listInbox, {});
+  const inbox = await fetchAuthQuery(api.domain.listInbox, {});
   let option: any, thread: any;
   for (const candidate of inbox) {
-    const full = await fetchAuthQuery(convexApi.domain.getThread, {
+    const full = await fetchAuthQuery(api.domain.getThread, {
       id: candidate.id,
     });
     const found = full?.replyGenerations?.[0]?.options?.find(
@@ -77,7 +77,7 @@ export async function PATCH(
         { status: 409 },
       );
   }
-  const result = await fetchAuthMutation(convexApi.domain.replyAction, {
+  const result = await fetchAuthMutation(api.domain.replyAction, {
     id,
     action: input.action,
     body: input.action === "edit" ? sanitizeAiText(input.body) : undefined,

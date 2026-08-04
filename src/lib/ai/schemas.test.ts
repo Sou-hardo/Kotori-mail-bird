@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AI_SCHEMA_VERSION,
   analysisSchema,
-  replyOutputSchema,
+  draftsToOptions,
   replyOutputSchemaFor,
   replyPreferenceSchema,
   replyRequestSchema,
@@ -37,7 +37,7 @@ describe("versioned AI schemas", () => {
 
   it("accepts one draft or exactly three distinct drafts", () => {
     expect(
-      replyOutputSchema.safeParse({
+      replyOutputSchemaFor(3).safeParse({
         schemaVersion: AI_SCHEMA_VERSION,
         drafts: [
           { label: "Direct", body: "Thanks, I can meet Tuesday." },
@@ -53,13 +53,13 @@ describe("versioned AI schemas", () => {
       }).success,
     ).toBe(true);
     expect(
-      replyOutputSchema.safeParse({
+      replyOutputSchemaFor(1).safeParse({
         schemaVersion: AI_SCHEMA_VERSION,
         drafts: [{ label: "Guided", body: "Thanks, Tuesday works." }],
       }).success,
     ).toBe(true);
     expect(
-      replyOutputSchema.safeParse({
+      replyOutputSchemaFor(3).safeParse({
         schemaVersion: AI_SCHEMA_VERSION,
         drafts: Array.from({ length: 3 }, () => ({
           label: "Same",
@@ -68,7 +68,7 @@ describe("versioned AI schemas", () => {
       }).success,
     ).toBe(false);
     expect(
-      replyOutputSchema.safeParse({
+      replyOutputSchemaFor(3).safeParse({
         schemaVersion: AI_SCHEMA_VERSION,
         drafts: [
           { label: "One", body: "First response" },
@@ -115,6 +115,21 @@ describe("versioned AI schemas", () => {
       replyRequestSchema.safeParse({ ...request, threadId: "not an id!" })
         .success,
     ).toBe(false);
+  });
+
+  it("maps drafts to persisted options, using the label as tone", () => {
+    expect(
+      draftsToOptions(
+        [
+          { label: "Direct", body: "Thanks, Tuesday works." },
+          { label: "", body: "Let's confirm Tuesday." },
+        ],
+        "Professional",
+      ),
+    ).toEqual([
+      { tone: "Direct", body: "Thanks, Tuesday works." },
+      { tone: "Professional", body: "Let's confirm Tuesday." },
+    ]);
   });
 
   it("accepts only the explicit reply preference shape", () => {
