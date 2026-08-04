@@ -114,11 +114,10 @@ export const decryptMessage = async (
   headers: await b.decJson<unknown>("emailMessages.headers", row.headers),
 });
 
-export const decryptAttachment = async (b: Box, row: Doc<"attachments">) => ({
-  ...row,
-  filename: await b.dec("attachments.filename", row.filename),
-  contentId: await b.dec("attachments.contentId", row.contentId),
-});
+// No decryptAttachment: attachment filenames are written encrypted by the
+// sync path but nothing surfaces them yet -- getThread returns
+// `attachments: []` and the AI prompt builder does the same. Add the
+// four-line counterpart when something actually reads them.
 
 export const decryptSummary = async (b: Box, row: Doc<"threadSummaries">) => ({
   ...row,
