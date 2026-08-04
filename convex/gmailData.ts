@@ -4,6 +4,13 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { computeInitialPhase } from "./gmailSync";
+import {
+  decryptDraft,
+  decryptThread,
+  encryptMessage,
+  encryptThread,
+  mailboxBox,
+} from "./mailCrypto";
 export const connection = internalQuery({
   args: { connectionId: v.id("gmailConnections") },
   handler: (ctx, a) => ctx.db.get(a.connectionId),
@@ -206,6 +213,7 @@ export const saveMessage = internalMutation({
   handler: async (ctx, { connectionId, gmailThreadId, message }) => {
     const c = await ctx.db.get(connectionId);
     if (!c) throw new Error("connection_not_found");
+    const box = mailboxBox(c);
     const now = Date.now();
     let thread = await ctx.db
       .query("emailThreads")
@@ -227,8 +235,7 @@ export const saveMessage = internalMutation({
         tenantId: c.tenantId,
         gmailConnectionId: connectionId,
         gmailThreadId,
-        subject,
-        snippet: message.snippet,
+        ...(await encryptThread(box, { subject, snippet: message.snippet })),
         latestMessageAt,
         isUnread: isUnreadMsg,
         labelIds: msgLabelIds,
@@ -245,9 +252,13 @@ export const saveMessage = internalMutation({
         labelIds: Array.from(new Set([...thread.labelIds, ...msgLabelIds])),
       };
       if (sentAt >= thread.latestMessageAt) {
+        const encrypted = await encryptThread(box, {
+          subject,
+          snippet: message.snippet,
+        });
         patch.latestMessageAt = sentAt;
-        patch.snippet = message.snippet;
-        if (subject) patch.subject = subject;
+        patch.snippet = encrypted.snippet;
+        if (subject) patch.subject = encrypted.subject;
       }
       await ctx.db.patch(thread._id, patch);
     }
@@ -261,17 +272,19 @@ export const saveMessage = internalMutation({
       threadId: thread._id,
       gmailMessageId: message.id,
       internetMessageId: header(message.payload?.headers, "Message-ID"),
-      fromAddress: header(message.payload?.headers, "From") ?? "",
-      toAddresses: (header(message.payload?.headers, "To") ?? "")
-        .split(",")
-        .filter(Boolean),
-      ccAddresses: (header(message.payload?.headers, "Cc") ?? "")
-        .split(",")
-        .filter(Boolean),
       sentAt,
-      snippet: message.snippet,
-      bodyText: bodyText(message.payload),
-      headers: message.payload?.headers,
+      ...(await encryptMessage(box, {
+        fromAddress: header(message.payload?.headers, "From") ?? "",
+        toAddresses: (header(message.payload?.headers, "To") ?? "")
+          .split(",")
+          .filter(Boolean),
+        ccAddresses: (header(message.payload?.headers, "Cc") ?? "")
+          .split(",")
+          .filter(Boolean),
+        snippet: message.snippet,
+        bodyText: bodyText(message.payload),
+        headers: message.payload?.headers,
+      })),
     };
     let messageId;
     let messageInserted = false;
@@ -300,10 +313,16 @@ export const saveMessage = internalMutation({
         const attachment = {
           messageId,
           gmailAttachmentId: payload.body.attachmentId,
-          filename: payload.filename || undefined,
+          filename: await box.enc(
+            "attachments.filename",
+            payload.filename || undefined,
+          ),
           mimeType: payload.mimeType ?? "application/octet-stream",
           sizeBytes: Number(payload.body.size) || 0,
-          contentId: header(payload.headers, "Content-ID"),
+          contentId: await box.enc(
+            "attachments.contentId",
+            header(payload.headers, "Content-ID"),
+          ),
         };
         if (existing) await ctx.db.patch(existing._id, attachment);
         else await ctx.db.insert("attachments", attachment);
@@ -406,7 +425,16 @@ export const draftContext = internalQuery({
     const thread = await ctx.db.get(draft.threadId);
     if (!thread) return null;
     const connection = await ctx.db.get(thread.gmailConnectionId);
-    return connection ? { draft, thread, connection } : null;
+    if (!connection) return null;
+    // The Gmail action needs readable subject/body/recipients to build the
+    // RFC822 message; decryption stays inside Convex and the plaintext never
+    // touches another table.
+    const box = mailboxBox(connection);
+    return {
+      draft: await decryptDraft(box, draft),
+      thread: await decryptThread(box, thread),
+      connection,
+    };
   },
 });
 export const markDraftCreated = internalMutation({

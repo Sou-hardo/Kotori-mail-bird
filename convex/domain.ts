@@ -1,7 +1,25 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { dto, requirePrincipal } from "./principal";
+import {
+  dto,
+  ownedConnection,
+  ownedConnections,
+  ownedThread,
+  requirePrincipal,
+} from "./principal";
+import {
+  decryptAnalysis,
+  decryptClassification,
+  decryptDraft,
+  decryptMessage,
+  decryptReplyOption,
+  decryptSummary,
+  decryptThread,
+  mailboxBox,
+  userBox,
+  type Box,
+} from "./mailCrypto";
 import { rules as reviewRules } from "../src/lib/ai/review-rules";
 import {
   emailAddress as address,
@@ -51,15 +69,31 @@ const INBOX_THREAD_LIMIT = 200;
 export const listInbox = query({
   args: { q: v.optional(v.string()), filter: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const { tenantId } = await requirePrincipal(ctx);
-    const rows = await ctx.db
-      .query("emailThreads")
-      .withIndex("by_tenant_latest", (q) => q.eq("tenantId", tenantId))
-      .order("desc")
-      .take(INBOX_THREAD_LIMIT);
+    const { userId } = await requirePrincipal(ctx);
+    // Threads are reached through the mailboxes this user owns, so a tenant
+    // co-member's inbox is not merely filtered out -- it is never read.
+    const boxes = new Map<string, Box>();
+    const candidates: Doc<"emailThreads">[] = [];
+    for (const connection of await ownedConnections(ctx, userId)) {
+      boxes.set(String(connection._id), mailboxBox(connection));
+      candidates.push(
+        ...(await ctx.db
+          .query("emailThreads")
+          .withIndex("by_connection_latest", (q) =>
+            q.eq("gmailConnectionId", connection._id),
+          )
+          .order("desc")
+          .take(INBOX_THREAD_LIMIT)),
+      );
+    }
+    const rows = candidates
+      .sort((a, b) => b.latestMessageAt - a.latestMessageAt)
+      .slice(0, INBOX_THREAD_LIMIT);
     const needle = args.q?.toLowerCase();
     const output = [];
-    for (const row of rows) {
+    for (const encryptedRow of rows) {
+      const box = boxes.get(String(encryptedRow.gmailConnectionId))!;
+      const row = await decryptThread(box, encryptedRow);
       if (
         !row.labelIds.includes("INBOX") ||
         (args.filter === "unread" && !row.isUnread)
@@ -77,7 +111,7 @@ export const listInbox = query({
       // The `q` search needs every message's fromAddress/bodyText, so fetch
       // the full list on that path; otherwise only the newest message is
       // ever returned, so take(1) off the same index.
-      const messages = needle
+      const encryptedMessages = needle
         ? await ctx.db
             .query("emailMessages")
             .withIndex("by_thread_sent", (q) => q.eq("threadId", row._id))
@@ -88,7 +122,15 @@ export const listInbox = query({
             .withIndex("by_thread_sent", (q) => q.eq("threadId", row._id))
             .order("desc")
             .take(1);
-      const summary = await ctx.db
+      // ponytail: search decrypts the candidate window in memory and
+      // substring-matches, exactly as it did over plaintext. Nothing
+      // searchable is persisted in the clear; the cost is O(window) AES-GCM
+      // per query. A blind index would be the upgrade if that ever bites --
+      // see docs/security/mail-encryption.md.
+      const messages = [];
+      for (const message of encryptedMessages)
+        messages.push(await decryptMessage(box, message));
+      const encryptedSummary = await ctx.db
         .query("threadSummaries")
         .withIndex("by_thread", (q) => q.eq("threadId", row._id))
         .unique();
@@ -104,8 +146,12 @@ export const listInbox = query({
       output.push({
         ...dto(row),
         messages: messages.slice(0, 1).map(dto),
-        classification: classification ? dto(classification) : null,
-        summary: summary ? dto(summary) : null,
+        classification: classification
+          ? dto(await decryptClassification(box, classification))
+          : null,
+        summary: encryptedSummary
+          ? dto(await decryptSummary(box, encryptedSummary))
+          : null,
       });
     }
     return output;
@@ -115,41 +161,35 @@ export const listInbox = query({
 export const getThread = query({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
-    const { tenantId, userId } = await requirePrincipal(ctx);
-    const thread = await ctx.db.get(id as Id<"emailThreads">);
-    if (!thread || thread.tenantId !== tenantId) return null;
-    const [
-      messages,
-      summary,
-      classification,
-      generations,
-      identities,
-      connection,
-    ] = await Promise.all([
-      ctx.db
-        .query("emailMessages")
-        .withIndex("by_thread_sent", (q) => q.eq("threadId", thread._id))
-        .collect(),
-      ctx.db
-        .query("threadSummaries")
-        .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
-        .unique(),
-      ctx.db
-        .query("classifications")
-        .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
-        .unique(),
-      ctx.db
-        .query("replyGenerations")
-        .withIndex("by_thread_created", (q) => q.eq("threadId", thread._id))
-        .order("desc")
-        .take(1),
-      ctx.db
-        .query("identityProfiles")
-        .withIndex("by_user_default", (q) => q.eq("userId", userId))
-        .collect(),
-      ctx.db.get(thread.gmailConnectionId),
-    ]);
-    if (!connection) return null;
+    const { userId } = await requirePrincipal(ctx);
+    const owned = await ownedThread(ctx, userId, id);
+    if (!owned) return null;
+    const { thread, connection } = owned;
+    const box = mailboxBox(connection);
+    const [messages, summary, classification, generations, identities] =
+      await Promise.all([
+        ctx.db
+          .query("emailMessages")
+          .withIndex("by_thread_sent", (q) => q.eq("threadId", thread._id))
+          .collect(),
+        ctx.db
+          .query("threadSummaries")
+          .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+          .unique(),
+        ctx.db
+          .query("classifications")
+          .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+          .unique(),
+        ctx.db
+          .query("replyGenerations")
+          .withIndex("by_thread_created", (q) => q.eq("threadId", thread._id))
+          .order("desc")
+          .take(1),
+        ctx.db
+          .query("identityProfiles")
+          .withIndex("by_user_default", (q) => q.eq("userId", userId))
+          .collect(),
+      ]);
     const generation = generations[0];
     const options = generation
       ? await ctx.db
@@ -159,14 +199,25 @@ export const getThread = query({
           )
           .collect()
       : [];
+    const decryptedMessages = [];
+    for (const message of messages)
+      decryptedMessages.push({
+        ...dto(await decryptMessage(box, message)),
+        attachments: [],
+      });
+    const decryptedOptions = [];
+    for (const option of options)
+      decryptedOptions.push(dto(await decryptReplyOption(box, option)));
     return {
-      ...dto(thread),
-      messages: messages.map((m) => ({ ...dto(m), attachments: [] })),
+      ...dto(await decryptThread(box, thread)),
+      messages: decryptedMessages,
       gmailConnection: connectionDto(connection),
-      summary: summary ? dto(summary) : null,
-      classification: classification ? dto(classification) : null,
+      summary: summary ? dto(await decryptSummary(box, summary)) : null,
+      classification: classification
+        ? dto(await decryptClassification(box, classification))
+        : null,
       replyGenerations: generation
-        ? [{ ...dto(generation), options: options.map(dto) }]
+        ? [{ ...dto(generation), options: decryptedOptions }]
         : [],
       identities: identities.map(dto),
     };
@@ -242,47 +293,60 @@ export const listReminders = query({
   args: {},
   handler: async (ctx) => {
     const { userId } = await requirePrincipal(ctx);
-    return (
-      await ctx.db
-        .query("followUpReminders")
-        .withIndex("by_user_status_due", (q) => q.eq("userId", userId))
-        .collect()
-    )
-      .map((reminder) => ({
+    const box = userBox(String(userId));
+    const out = [];
+    for (const reminder of await ctx.db
+      .query("followUpReminders")
+      .withIndex("by_user_status_due", (q) => q.eq("userId", userId))
+      .collect())
+      out.push({
         ...dto(reminder),
-        note: reminder.note ?? null,
-      }))
-      .sort((a, b) => String(a.dueAt).localeCompare(String(b.dueAt)));
+        title: (await box.dec("followUpReminders.title", reminder.title)) ?? "",
+        note: (await box.dec("followUpReminders.note", reminder.note)) ?? null,
+      });
+    return out.sort((a, b) => String(a.dueAt).localeCompare(String(b.dueAt)));
   },
 });
 export const listNotifications = query({
   args: {},
   handler: async (ctx) => {
     const { userId } = await requirePrincipal(ctx);
-    return (
-      await ctx.db
-        .query("notifications")
-        .withIndex("by_user_read_created", (q) => q.eq("userId", userId))
-        .order("desc")
-        .take(50)
-    ).map(dto);
+    const box = userBox(String(userId));
+    const out = [];
+    for (const row of await ctx.db
+      .query("notifications")
+      .withIndex("by_user_read_created", (q) => q.eq("userId", userId))
+      .order("desc")
+      .take(50))
+      out.push({
+        ...dto(row),
+        title: (await box.dec("notifications.title", row.title)) ?? "",
+        body: (await box.dec("notifications.body", row.body)) ?? "",
+      });
+    return out;
   },
 });
 export const listDrafts = query({
   args: {},
   handler: async (ctx) => {
-    const { tenantId } = await requirePrincipal(ctx);
-    const threads = await ctx.db
-      .query("emailThreads")
-      .withIndex("by_tenant_latest", (q) => q.eq("tenantId", tenantId))
-      .collect();
+    const { userId } = await requirePrincipal(ctx);
     const out = [];
-    for (const thread of threads) {
-      for (const draft of await ctx.db
-        .query("gmailDrafts")
-        .withIndex("by_thread_status", (q) => q.eq("threadId", thread._id))
+    for (const connection of await ownedConnections(ctx, userId)) {
+      const box = mailboxBox(connection);
+      for (const thread of await ctx.db
+        .query("emailThreads")
+        .withIndex("by_connection_latest", (q) =>
+          q.eq("gmailConnectionId", connection._id),
+        )
         .collect())
-        out.push({ ...dto(draft), thread: dto(thread) });
+        for (const draft of await ctx.db
+          .query("gmailDrafts")
+          .withIndex("by_thread_status", (q) => q.eq("threadId", thread._id))
+          .collect())
+          out.push({
+            ...dto(await decryptDraft(box, draft)),
+            thread: dto(await decryptThread(box, thread)),
+          });
     }
     return out.sort((a, b) =>
       String((b as Record<string, unknown>).updatedAt).localeCompare(
@@ -314,7 +378,13 @@ export const upsertConnection = mutation({
       )
       .unique();
     if (row) {
+      // ownerUserId is deliberately absent from this patch: a mailbox never
+      // changes hands. A re-connect by a different tenant member updates the
+      // credentials but leaves the original owner in place.
+      if (row.ownerUserId && row.ownerUserId !== p.userId)
+        throw new Error("Forbidden");
       await ctx.db.patch(row._id, {
+        ownerUserId: row.ownerUserId ?? p.userId,
         emailAddress: args.emailAddress,
         encryptedCredentials: args.encryptedCredentials,
         scopes: args.scopes,
@@ -325,6 +395,7 @@ export const upsertConnection = mutation({
     } else {
       const id = await ctx.db.insert("gmailConnections", {
         tenantId: p.tenantId,
+        ownerUserId: p.userId,
         googleAccountId: args.googleAccountId,
         emailAddress: args.emailAddress,
         encryptedCredentials: args.encryptedCredentials,
@@ -355,8 +426,8 @@ export const getConnection = query({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
     const p = await requirePrincipal(ctx);
-    const row = await ctx.db.get(id as Id<"gmailConnections">);
-    if (!row || row.tenantId !== p.tenantId) return null;
+    const row = await ownedConnection(ctx, p.userId, id);
+    if (!row) return null;
     const sync = await ctx.db
       .query("syncStates")
       .withIndex("by_connection", (q) => q.eq("gmailConnectionId", row._id))
@@ -368,12 +439,9 @@ export const listConnections = query({
   args: {},
   handler: async (ctx) => {
     const p = await requirePrincipal(ctx);
-    const rows = (
-      await ctx.db
-        .query("gmailConnections")
-        .withIndex("by_tenant_google", (q) => q.eq("tenantId", p.tenantId))
-        .collect()
-    ).sort((a, b) => b.updatedAt - a.updatedAt);
+    const rows = (await ownedConnections(ctx, p.userId)).sort(
+      (a, b) => b.updatedAt - a.updatedAt,
+    );
     const out = [];
     for (const row of rows) {
       const sync = await ctx.db
@@ -392,9 +460,8 @@ export const revokeConnection = mutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
     const p = await requirePrincipal(ctx);
-    const row = await ctx.db.get(id as Id<"gmailConnections">);
-    if (!row || row.tenantId !== p.tenantId)
-      throw new Error("connection_not_found");
+    const row = await ownedConnection(ctx, p.userId, id);
+    if (!row) throw new Error("connection_not_found");
     await ctx.db.patch(row._id, {
       status: "REVOKED",
       encryptedCredentials: "",
@@ -415,14 +482,16 @@ export const latestAnalysis = query({
   args: { threadId: v.string() },
   handler: async (ctx, { threadId }) => {
     const p = await requirePrincipal(ctx);
-    const thread = await ctx.db.get(threadId as Id<"emailThreads">);
-    if (!thread || thread.tenantId !== p.tenantId) return null;
+    const owned = await ownedThread(ctx, p.userId, threadId);
+    if (!owned) return null;
     const rows = await ctx.db
       .query("threadAnalyses")
-      .withIndex("by_thread_created", (q) => q.eq("threadId", thread._id))
+      .withIndex("by_thread_created", (q) => q.eq("threadId", owned.thread._id))
       .order("desc")
       .take(1);
-    return rows[0] ? dto(rows[0]) : null;
+    return rows[0]
+      ? dto(await decryptAnalysis(mailboxBox(owned.connection), rows[0]))
+      : null;
   },
 });
 
@@ -436,11 +505,17 @@ export const replyAction = mutation({
   },
   handler: async (ctx, args) => {
     const p = await requirePrincipal(ctx);
-    const option = await ctx.db.get(args.id as Id<"replyOptions">);
-    if (!option) throw new Error("option_not_found");
-    const thread = await ctx.db.get(option.threadId);
-    if (!thread || thread.tenantId !== p.tenantId)
-      throw new Error("option_not_found");
+    const encryptedOption = await ctx.db.get(args.id as Id<"replyOptions">);
+    if (!encryptedOption) throw new Error("option_not_found");
+    const owned = await ownedThread(
+      ctx,
+      p.userId,
+      String(encryptedOption.threadId),
+    );
+    if (!owned) throw new Error("option_not_found");
+    const { thread: encryptedThread, connection } = owned;
+    const box = mailboxBox(connection);
+    const option = await decryptReplyOption(box, encryptedOption);
     if (!["edit", "reject", "approve"].includes(args.action))
       throw new Error("invalid_action");
     let body = option.body,
@@ -451,24 +526,27 @@ export const replyAction = mutation({
         .replace(/[<>]/g, "")
         .slice(0, 20000);
       version++;
-      await ctx.db.patch(option._id, { body, version });
+      await ctx.db.patch(option._id, {
+        body: await box.enc("replyOptions.body", body),
+        version,
+      });
       auditMetadata = { version, contentChanged: body !== option.body };
     }
+    // Audit metadata is stored in the clear, so it records that a rejection
+    // happened and how many recipients were involved -- never the reason
+    // text or the addresses themselves.
     if (args.action === "reject")
-      auditMetadata = {
-        version,
-        reason: String(args.reason ?? "")
-          .replace(/[<>]/g, "")
-          .slice(0, 1000),
-      };
+      auditMetadata = { version, reasonLength: (args.reason ?? "").length };
     if (args.action === "approve") {
-      const connection = await ctx.db.get(thread.gmailConnectionId);
-      const messages = await ctx.db
+      const thread = await decryptThread(box, encryptedThread);
+      const messages = [];
+      for (const message of await ctx.db
         .query("emailMessages")
         .withIndex("by_thread_sent", (q) => q.eq("threadId", thread._id))
         .order("desc")
-        .collect();
-      const owner = address(connection?.emailAddress ?? "");
+        .collect())
+        messages.push(await decryptMessage(box, message));
+      const owner = address(connection.emailAddress);
       const inbound = messages.find(
         (message) => address(message.fromAddress) !== owner,
       );
@@ -512,7 +590,7 @@ export const replyAction = mutation({
         version,
         acknowledgements: [...acknowledged],
         requiredReviewFlags: required,
-        recipients: [...to, ...cc],
+        recipientCount: to.length + cc.length,
       };
       const existing = await ctx.db
         .query("gmailDrafts")
@@ -523,9 +601,9 @@ export const replyAction = mutation({
           threadId: thread._id,
           replyOptionId: option._id,
           status: "APPROVED",
-          body: option.body,
-          toAddresses: to,
-          ccAddresses: cc,
+          body: (await box.enc("gmailDrafts.body", option.body))!,
+          toAddresses: (await box.encJson("gmailDrafts.toAddresses", to))!,
+          ccAddresses: (await box.encJson("gmailDrafts.ccAddresses", cc))!,
           sourceMessageId: inbound.gmailMessageId,
           createdAt: Date.now(),
           updatedAt: Date.now(),

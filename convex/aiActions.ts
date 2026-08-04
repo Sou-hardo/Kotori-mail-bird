@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
+import type { DecryptedMessage } from "./mailCrypto";
 import { deepSeekJson } from "../src/lib/ai/deepseek";
 import {
   analysisPrompt,
@@ -18,9 +19,11 @@ import {
   type ThreadAnalysisResult,
 } from "../src/lib/ai/schemas";
 
+// aiData decrypts before handing content over, so these are the plaintext
+// shapes, not the stored ones.
 type ReplyContext = {
   thread: Doc<"emailThreads">;
-  messages: Array<Doc<"emailMessages">>;
+  messages: Array<DecryptedMessage>;
   identity: Doc<"identityProfiles">;
 };
 
@@ -42,7 +45,7 @@ const DEFAULT_ANALYSIS: ThreadAnalysisResult = {
 
 function toPromptThread(thread: {
   subject?: string | null;
-  messages: Array<Doc<"emailMessages">>;
+  messages: Array<DecryptedMessage>;
 }): PromptThread {
   return {
     subject: thread.subject,
