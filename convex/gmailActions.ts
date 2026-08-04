@@ -5,6 +5,7 @@ import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import type { DecryptedDraft } from "./mailCrypto";
 import { GMAIL_UNIT_COST } from "./quota";
 import {
   classifyGmailError,
@@ -23,8 +24,9 @@ type SyncResult =
   | { paused: true }
   | { messages: number; incremental: boolean };
 
+// gmailData.draftContext decrypts before returning, so these are plaintext.
 type DraftContext = {
-  draft: Doc<"gmailDrafts">;
+  draft: DecryptedDraft;
   thread: Doc<"emailThreads">;
   connection: Doc<"gmailConnections">;
 };

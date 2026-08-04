@@ -1,15 +1,52 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
+import type { QueryCtx, MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import {
+  decryptAnalysis,
+  decryptMessage,
+  decryptThread,
+  mailboxBox,
+  type Box,
+} from "./mailCrypto";
+
+// Every AI path needs the same three things: the thread, the mailbox that
+// owns it, and that mailbox's key. Resolving them together means the owner
+// check can't be forgotten on one branch.
+async function mailbox(
+  ctx: QueryCtx | MutationCtx,
+  threadId: Id<"emailThreads">,
+) {
+  const thread = await ctx.db.get(threadId);
+  if (!thread) return null;
+  const connection = await ctx.db.get(thread.gmailConnectionId);
+  if (!connection?.ownerUserId) return null;
+  return { thread, connection, box: mailboxBox(connection) };
+}
+
+const decryptMessages = async (
+  box: Box,
+  ctx: QueryCtx | MutationCtx,
+  threadId: Id<"emailThreads">,
+) => {
+  const out = [];
+  for (const message of await ctx.db
+    .query("emailMessages")
+    .withIndex("by_thread_sent", (q) => q.eq("threadId", threadId))
+    .collect())
+    out.push(await decryptMessage(box, message));
+  return out;
+};
+
 export const threadContext = internalQuery({
   args: { threadId: v.id("emailThreads") },
   handler: async (ctx, { threadId }) => {
-    const thread = await ctx.db.get(threadId);
-    if (!thread) return null;
-    const messages = await ctx.db
-      .query("emailMessages")
-      .withIndex("by_thread_sent", (q) => q.eq("threadId", threadId))
-      .collect();
-    return { thread, messages };
+    const resolved = await mailbox(ctx, threadId);
+    if (!resolved) return null;
+    return {
+      thread: await decryptThread(resolved.box, resolved.thread),
+      messages: await decryptMessages(resolved.box, ctx, threadId),
+    };
   },
 });
 export const replyContext = internalQuery({
@@ -19,49 +56,55 @@ export const replyContext = internalQuery({
     actorId: v.id("users"),
   },
   handler: async (ctx, a) => {
-    const [thread, identity, user] = await Promise.all([
-      ctx.db.get(a.threadId),
+    const [resolved, identity, user] = await Promise.all([
+      mailbox(ctx, a.threadId),
       ctx.db.get(a.identityId),
       ctx.db.get(a.actorId),
     ]);
-    if (!thread || !identity || !user || identity.userId !== user._id)
+    if (!resolved || !identity || !user || identity.userId !== user._id)
       return null;
-    const membership = await ctx.db
-      .query("memberships")
-      .withIndex("by_tenant_user", (q) =>
-        q.eq("tenantId", thread.tenantId).eq("userId", user._id),
-      )
-      .unique();
-    if (!membership) return null;
-    const messages = await ctx.db
-      .query("emailMessages")
-      .withIndex("by_thread_sent", (q) => q.eq("threadId", a.threadId))
-      .collect();
-    return { thread, messages, identity };
+    // Owning the mailbox, not sharing a tenant with it, is what grants the
+    // AI path access to this thread.
+    if (resolved.connection.ownerUserId !== user._id) return null;
+    return {
+      thread: await decryptThread(resolved.box, resolved.thread),
+      messages: await decryptMessages(resolved.box, ctx, a.threadId),
+      identity,
+    };
   },
 });
 export const latestAnalysisFor = internalQuery({
   args: { threadId: v.id("emailThreads") },
   handler: async (ctx, { threadId }) => {
+    const resolved = await mailbox(ctx, threadId);
+    if (!resolved) return null;
     const rows = await ctx.db
       .query("threadAnalyses")
       .withIndex("by_thread_created", (q) => q.eq("threadId", threadId))
       .order("desc")
       .take(1);
-    return rows[0]?.analysis ?? null;
+    return rows[0]
+      ? ((await decryptAnalysis(resolved.box, rows[0])).analysis ?? null)
+      : null;
   },
 });
 export const saveAnalysis = internalMutation({
   args: { threadId: v.id("emailThreads"), result: v.any() },
   handler: async (ctx, { threadId, result }) => {
+    const resolved = await mailbox(ctx, threadId);
+    if (!resolved) throw new Error("thread_not_found");
+    const { box } = resolved;
     const now = Date.now(),
       model = process.env.DEEPSEEK_MODEL ?? "deepseek-chat";
     await ctx.db.insert("threadAnalyses", {
       threadId,
       schemaVersion: "1",
       model,
-      analysis: result,
-      safetyFlags: result.reviewReasons ?? [],
+      analysis: (await box.encJson("threadAnalyses.analysis", result))!,
+      safetyFlags: (await box.encJson(
+        "threadAnalyses.safetyFlags",
+        result.reviewReasons ?? [],
+      ))!,
       createdAt: now,
     });
     const old = await ctx.db
@@ -71,7 +114,7 @@ export const saveAnalysis = internalMutation({
     const c = {
       category: result.category ?? "UNKNOWN",
       confidence: Number(result.confidence ?? 0),
-      rationale: result.summary,
+      rationale: await box.enc("classifications.rationale", result.summary),
       model,
       updatedAt: now,
     };
@@ -87,8 +130,14 @@ export const saveAnalysis = internalMutation({
       .withIndex("by_thread", (q) => q.eq("threadId", threadId))
       .unique();
     const sd = {
-      summary: String(result.summary ?? ""),
-      requestedActions: result.actions ?? [],
+      summary: (await box.enc(
+        "threadSummaries.summary",
+        String(result.summary ?? ""),
+      ))!,
+      requestedActions: (await box.encJson(
+        "threadSummaries.requestedActions",
+        result.actions ?? [],
+      ))!,
       model,
       updatedAt: now,
     };
@@ -117,28 +166,23 @@ export const saveReplies = internalMutation({
     }),
   },
   handler: async (ctx, a) => {
-    const [job, thread, user, identity] = await Promise.all([
+    const [job, resolved, user, identity] = await Promise.all([
       ctx.db.get(a.jobId),
-      ctx.db.get(a.threadId),
+      mailbox(ctx, a.threadId),
       ctx.db.get(a.actorId),
       ctx.db.get(a.identityId),
     ]);
     if (
       !job ||
-      !thread ||
+      !resolved ||
       !user ||
       !identity ||
-      job.tenantId !== thread.tenantId ||
-      identity.userId !== user._id
+      job.tenantId !== resolved.thread.tenantId ||
+      identity.userId !== user._id ||
+      resolved.connection.ownerUserId !== user._id
     )
       throw new Error("reply_context_not_found");
-    const membership = await ctx.db
-      .query("memberships")
-      .withIndex("by_tenant_user", (q) =>
-        q.eq("tenantId", thread.tenantId).eq("userId", user._id),
-      )
-      .unique();
-    if (!membership) throw new Error("reply_context_not_found");
+    const { thread, box } = resolved;
 
     const jobInput = job.input as
       | {
@@ -188,7 +232,7 @@ export const saveReplies = internalMutation({
         threadId: a.threadId,
         generationId,
         tone: option.tone || a.tone,
-        body: normalizedBodies[rank]!,
+        body: (await box.enc("replyOptions.body", normalizedBodies[rank]!))!,
         model: process.env.DEEPSEEK_MODEL ?? "deepseek-chat",
         rank,
         intent: a.intent,

@@ -95,14 +95,24 @@ export default defineSchema({
     .index("by_user", ["userId"]),
   gmailConnections: defineTable({
     tenantId: v.id("tenants"),
+    // The authenticated user who connected this mailbox. Immutable after
+    // insert: it is the sole basis for mail authorization, so re-pointing it
+    // would hand someone else's inbox over. Optional only so the backfill in
+    // migrations.ts can run before it is populated.
+    ownerUserId: v.optional(v.id("users")),
     googleAccountId: v.string(),
     emailAddress: v.string(),
     encryptedCredentials: v.string(),
+    // Which MAIL_ENCRYPTION_KEY generation this mailbox's content is under.
+    // Unused until in-place re-encryption tooling exists; see
+    // docs/security/mail-encryption.md.
+    keyVersion: v.optional(v.number()),
     scopes: v.array(v.string()),
     status: connectionStatus,
     lastError: v.optional(v.string()),
     ...timestamps,
   })
+    .index("by_owner", ["ownerUserId"])
     .index("by_tenant_google", ["tenantId", "googleAccountId"])
     .index("by_tenant_email", ["tenantId", "emailAddress"])
     .index("by_tenant_status", ["tenantId", "status"]),
@@ -125,31 +135,35 @@ export default defineSchema({
     resumeAt: v.optional(v.number()),
     windowDays: v.optional(v.number()),
   }).index("by_connection", ["gmailConnectionId"]),
+  // Fields marked `enc` below hold ciphertext produced by convex/crypto.ts,
+  // not readable text. Everything else on these tables is metadata that is
+  // deliberately left in the clear so it can be indexed; see
+  // docs/security/mail-encryption.md for what that metadata reveals.
   emailThreads: defineTable({
     tenantId: v.id("tenants"),
     gmailConnectionId: v.id("gmailConnections"),
     gmailThreadId: v.string(),
-    subject: v.optional(v.string()),
-    snippet: v.optional(v.string()),
+    subject: v.optional(v.string()), // enc
+    snippet: v.optional(v.string()), // enc
     latestMessageAt: v.number(),
     isUnread: v.boolean(),
     labelIds: v.array(v.string()),
     ...timestamps,
   })
     .index("by_connection_gmail", ["gmailConnectionId", "gmailThreadId"])
+    .index("by_connection_latest", ["gmailConnectionId", "latestMessageAt"])
     .index("by_tenant_latest", ["tenantId", "latestMessageAt"]),
   emailMessages: defineTable({
     threadId: v.id("emailThreads"),
     gmailMessageId: v.string(),
     internetMessageId: v.optional(v.string()),
-    fromAddress: v.string(),
-    toAddresses: v.array(v.string()),
-    ccAddresses: v.array(v.string()),
+    fromAddress: v.string(), // enc
+    toAddresses: v.optional(v.string()), // enc (JSON array)
+    ccAddresses: v.optional(v.string()), // enc (JSON array)
     sentAt: v.number(),
-    snippet: v.optional(v.string()),
-    bodyText: v.optional(v.string()),
-    bodyHtml: v.optional(v.string()),
-    headers: v.optional(v.any()),
+    snippet: v.optional(v.string()), // enc
+    bodyText: v.optional(v.string()), // enc
+    headers: v.optional(v.string()), // enc (JSON)
     createdAt: v.number(),
   })
     .index("by_thread_gmail", ["threadId", "gmailMessageId"])
@@ -158,10 +172,10 @@ export default defineSchema({
   attachments: defineTable({
     messageId: v.id("emailMessages"),
     gmailAttachmentId: v.string(),
-    filename: v.optional(v.string()),
+    filename: v.optional(v.string()), // enc
     mimeType: v.string(),
     sizeBytes: v.number(),
-    contentId: v.optional(v.string()),
+    contentId: v.optional(v.string()), // enc
   }).index("by_message_gmail", ["messageId", "gmailAttachmentId"]),
   identityProfiles: defineTable({
     userId: v.id("users"),
@@ -183,8 +197,8 @@ export default defineSchema({
   followUpReminders: defineTable({
     userId: v.id("users"),
     threadId: v.optional(v.id("emailThreads")),
-    title: v.string(),
-    note: v.optional(v.string()),
+    title: v.string(), // enc
+    note: v.optional(v.string()), // enc
     dueAt: v.number(),
     status: reminderStatus,
     scheduledWorkId: v.optional(v.string()),
@@ -196,8 +210,8 @@ export default defineSchema({
     userId: v.id("users"),
     threadId: v.optional(v.id("emailThreads")),
     kind: notificationKind,
-    title: v.string(),
-    body: v.string(),
+    title: v.string(), // enc
+    body: v.string(), // enc
     readAt: v.optional(v.number()),
     createdAt: v.number(),
   })
@@ -217,14 +231,14 @@ export default defineSchema({
     threadId: v.id("emailThreads"),
     category: threadCategory,
     confidence: v.number(),
-    rationale: v.optional(v.string()),
+    rationale: v.optional(v.string()), // enc
     model: v.string(),
     ...timestamps,
   }).index("by_thread", ["threadId"]),
   threadSummaries: defineTable({
     threadId: v.id("emailThreads"),
-    summary: v.string(),
-    requestedActions: v.array(v.string()),
+    summary: v.string(), // enc
+    requestedActions: v.string(), // enc (JSON array)
     model: v.string(),
     ...timestamps,
   }).index("by_thread", ["threadId"]),
@@ -232,8 +246,8 @@ export default defineSchema({
     threadId: v.id("emailThreads"),
     schemaVersion: v.string(),
     model: v.string(),
-    analysis: v.any(),
-    safetyFlags: v.any(),
+    analysis: v.string(), // enc (JSON)
+    safetyFlags: v.string(), // enc (JSON)
     createdAt: v.number(),
   }).index("by_thread_created", ["threadId", "createdAt"]),
   replyGenerations: defineTable({
@@ -253,7 +267,7 @@ export default defineSchema({
     threadId: v.id("emailThreads"),
     generationId: v.optional(v.id("replyGenerations")),
     tone: v.string(),
-    body: v.string(),
+    body: v.string(), // enc
     model: v.string(),
     rank: v.number(),
     intent: v.optional(v.string()),
@@ -267,10 +281,10 @@ export default defineSchema({
     replyOptionId: v.optional(v.id("replyOptions")),
     gmailDraftId: v.optional(v.string()),
     status: draftStatus,
-    subject: v.optional(v.string()),
-    body: v.string(),
-    toAddresses: v.array(v.string()),
-    ccAddresses: v.array(v.string()),
+    subject: v.optional(v.string()), // enc
+    body: v.string(), // enc
+    toAddresses: v.string(), // enc (JSON array)
+    ccAddresses: v.string(), // enc (JSON array)
     sourceMessageId: v.optional(v.string()),
     ...timestamps,
   })

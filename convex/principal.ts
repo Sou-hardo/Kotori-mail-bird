@@ -1,5 +1,6 @@
 import { ConvexError } from "convex/values";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { authComponent } from "./auth";
 
 export async function requirePrincipal(
@@ -36,6 +37,46 @@ export async function requirePrincipal(
     role: membership.role,
   };
 }
+
+// Mailbox authorization. Tenant membership is NOT enough to reach mail: a
+// mailbox belongs to the single user who connected it, so every mail-touching
+// path resolves through one of these three helpers rather than comparing
+// tenantIds itself. Callers keep their own null-vs-throw behaviour.
+
+export async function ownedConnection(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<"users">,
+  connectionId: string,
+): Promise<Doc<"gmailConnections"> | null> {
+  const id = ctx.db.normalizeId("gmailConnections", connectionId);
+  const connection = id ? await ctx.db.get(id) : null;
+  return connection && connection.ownerUserId === userId ? connection : null;
+}
+
+export async function ownedThread(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<"users">,
+  threadId: string,
+): Promise<{
+  thread: Doc<"emailThreads">;
+  connection: Doc<"gmailConnections">;
+} | null> {
+  const id = ctx.db.normalizeId("emailThreads", threadId);
+  const thread = id ? await ctx.db.get(id) : null;
+  if (!thread) return null;
+  const connection = await ctx.db.get(thread.gmailConnectionId);
+  if (!connection || connection.ownerUserId !== userId) return null;
+  return { thread, connection };
+}
+
+export const ownedConnections = (
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<"users">,
+): Promise<Doc<"gmailConnections">[]> =>
+  ctx.db
+    .query("gmailConnections")
+    .withIndex("by_owner", (q) => q.eq("ownerUserId", userId))
+    .collect();
 
 const SERIALIZED_TIMESTAMPS = [
   "createdAt",

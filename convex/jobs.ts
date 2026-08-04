@@ -4,7 +4,13 @@ import { internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { Doc, Id, DataModel } from "./_generated/dataModel";
 import { generalPool, syncPool } from "./pools";
-import { dto, requirePrincipal } from "./principal";
+import {
+  dto,
+  ownedConnection,
+  ownedThread,
+  requirePrincipal,
+} from "./principal";
+import { userBox } from "./mailCrypto";
 import { readUsage } from "./quota";
 import { shouldSkipPollActive } from "./gmailSync";
 
@@ -26,27 +32,27 @@ async function authorizeJobInput(
   user: Doc<"users">,
 ): Promise<Record<string, unknown>> {
   const userId = user._id;
+  void tenantId;
   const authorizedInput = { ...input };
   if (!publicKinds.has(kind)) throw new Error("job_kind_not_allowed");
+  // A job is the back door into every mail path, so it is gated on mailbox
+  // ownership exactly like the queries are -- tenant membership is not enough.
   if (typeof input.connectionId === "string") {
-    const row = await ctx.db.get(input.connectionId as Id<"gmailConnections">);
-    if (!row || row.tenantId !== tenantId)
+    if (!(await ownedConnection(ctx, userId, input.connectionId)))
       throw new Error("connection_not_found");
   }
-  let thread: Doc<"emailThreads"> | null = null;
-  if (typeof input.threadId === "string") {
-    thread = await ctx.db.get(input.threadId as Id<"emailThreads">);
-    if (!thread || thread.tenantId !== tenantId)
-      throw new Error("thread_not_found");
-  }
+  if (
+    typeof input.threadId === "string" &&
+    !(await ownedThread(ctx, userId, input.threadId))
+  )
+    throw new Error("thread_not_found");
   if (typeof input.identityId === "string") {
     const row = await ctx.db.get(input.identityId as Id<"identityProfiles">);
     if (!row || row.userId !== userId) throw new Error("identity_not_found");
   }
   if (typeof input.draftId === "string") {
     const draft = await ctx.db.get(input.draftId as Id<"gmailDrafts">);
-    const draftThread = draft ? await ctx.db.get(draft.threadId) : null;
-    if (!draft || !draftThread || draftThread.tenantId !== tenantId)
+    if (!draft || !(await ownedThread(ctx, userId, String(draft.threadId))))
       throw new Error("draft_not_found");
   }
   if (kind === "ai.reply.generate") {
@@ -474,21 +480,29 @@ export const saveReminder = mutation({
   handler: async (ctx, { id, input }) => {
     const { userId, tenantId } = await requirePrincipal(ctx);
     const now = Date.now();
-    if (input.threadId) {
-      const t = await ctx.db.get(input.threadId as Id<"emailThreads">);
-      if (!t || t.tenantId !== tenantId) throw new Error("thread_not_found");
-    }
+    if (input.threadId && !(await ownedThread(ctx, userId, input.threadId)))
+      throw new Error("thread_not_found");
+    const box = userBox(String(userId));
+    const encrypted = {
+      ...input,
+      ...(input.title !== undefined && {
+        title: await box.enc("followUpReminders.title", String(input.title)),
+      }),
+      ...(input.note !== undefined && {
+        note: await box.enc("followUpReminders.note", String(input.note)),
+      }),
+    };
     let reminderId: Id<"followUpReminders">;
     if (id) {
       const old = await ctx.db.get(id as Id<"followUpReminders">);
       if (!old || old.userId !== userId) return null;
       if (old.scheduledWorkId)
         await generalPool.cancel(ctx, old.scheduledWorkId as any);
-      await ctx.db.patch(old._id, { ...input, updatedAt: now });
+      await ctx.db.patch(old._id, { ...encrypted, updatedAt: now });
       reminderId = old._id;
     } else
       reminderId = await ctx.db.insert("followUpReminders", {
-        ...input,
+        ...encrypted,
         userId,
         status: input.status ?? "OPEN",
         createdAt: now,
@@ -506,7 +520,12 @@ export const saveReminder = mutation({
       );
       await ctx.db.patch(reminderId, { scheduledWorkId: job.workId });
     }
-    return dto((await ctx.db.get(reminderId))!);
+    const saved = (await ctx.db.get(reminderId))!;
+    return {
+      ...dto(saved),
+      title: (await box.dec("followUpReminders.title", saved.title)) ?? "",
+      note: (await box.dec("followUpReminders.note", saved.note)) ?? null,
+    };
   },
 });
 export const deleteReminder = mutation({

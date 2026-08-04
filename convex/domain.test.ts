@@ -54,3 +54,29 @@ describe("getThread source", () => {
     expect(source).not.toMatch(/gmailConnection:\s*dto\(connection\)/);
   });
 });
+
+// Mail access is mailbox-owner-scoped (issue #61). The owner checks live in
+// principal.ts and are exercised in access.test.ts; what can't be reached
+// through those helpers is a *new* handler that gates on tenant membership
+// instead. Pin the sources so that regression shows up as a failing test.
+describe("mail authorization sources", () => {
+  const read = (file: string) =>
+    readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8");
+
+  it.each(["./domain.ts", "./jobs.ts", "./aiData.ts"])(
+    "%s never authorizes mail by comparing tenantIds",
+    (file) => {
+      expect(read(file)).not.toMatch(/tenantId\s*!==\s*\w+\.tenantId/);
+    },
+  );
+
+  it("routes every mail lookup in domain.ts through an owner helper", () => {
+    const source = read("./domain.ts");
+    // A raw ctx.db.get() cast to a mail id would sidestep the helpers.
+    expect(source).not.toMatch(
+      /ctx\.db\.get\([^)]*as Id<"(emailThreads|gmailConnections)">/,
+    );
+    for (const helper of ["ownedThread", "ownedConnection", "ownedConnections"])
+      expect(source).toContain(helper);
+  });
+});
