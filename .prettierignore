@@ -4,3 +4,5 @@ next-env.d.ts
 .next/
 node_modules/
 src/generated/
+future-plan.md
+.claude/

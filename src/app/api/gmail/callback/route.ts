@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { requireCurrentTenant } from "@/lib/auth/current-tenant";
 import { fetchAuthMutation } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../../convex/_generated/api";
 import { getServerEnv } from "@/lib/env";
 import {
   GMAIL_SCOPES,
@@ -68,18 +68,15 @@ export async function GET(request: Request) {
       tokens as Credentials,
       env.CREDENTIAL_ENCRYPTION_KEY,
     );
-    const connection = await fetchAuthMutation(
-      convexApi.domain.upsertConnection,
-      {
-        tenantId: state.tenantId,
-        actorId: state.userId,
-        googleAccountId: payload.sub,
-        emailAddress: payload.email,
-        encryptedCredentials,
-        scopes,
-      },
-    );
-    await fetchAuthMutation(convexApi.jobs.enqueue, {
+    const connection = await fetchAuthMutation(api.domain.upsertConnection, {
+      tenantId: state.tenantId,
+      actorId: state.userId,
+      googleAccountId: payload.sub,
+      emailAddress: payload.email,
+      encryptedCredentials,
+      scopes,
+    });
+    await fetchAuthMutation(api.jobs.enqueue, {
       kind: "gmail.sync",
       input: { connectionId: connection.id, forceFull: true },
       dedupeKey: `${connection.id}:initial`,

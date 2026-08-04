@@ -37,18 +37,21 @@ export async function requirePrincipal(
   };
 }
 
-type SerializedTimestamp =
-  | "createdAt"
-  | "updatedAt"
-  | "dueAt"
-  | "latestMessageAt"
-  | "sentAt"
-  | "readAt"
-  | "lastStartedAt"
-  | "lastCompletedAt"
-  | "scheduledAt"
-  | "startedAt"
-  | "completedAt";
+const SERIALIZED_TIMESTAMPS = [
+  "createdAt",
+  "updatedAt",
+  "dueAt",
+  "latestMessageAt",
+  "sentAt",
+  "readAt",
+  "lastStartedAt",
+  "lastCompletedAt",
+  "scheduledAt",
+  "startedAt",
+  "completedAt",
+] as const;
+
+type SerializedTimestamp = (typeof SERIALIZED_TIMESTAMPS)[number];
 
 type Dto<T extends { _id: unknown; _creationTime: number }> = {
   [K in keyof Omit<T, "_id" | "_creationTime">]: K extends SerializedTimestamp
@@ -77,19 +80,7 @@ export const dto = <
   const out: Record<string, unknown> = { ...doc, id: doc._id };
   delete out._id;
   delete out._creationTime;
-  for (const key of [
-    "createdAt",
-    "updatedAt",
-    "dueAt",
-    "latestMessageAt",
-    "sentAt",
-    "readAt",
-    "lastStartedAt",
-    "lastCompletedAt",
-    "scheduledAt",
-    "startedAt",
-    "completedAt",
-  ]) {
+  for (const key of SERIALIZED_TIMESTAMPS) {
     if (typeof out[key] === "number")
       out[key] = new Date(out[key] as number).toISOString();
   }

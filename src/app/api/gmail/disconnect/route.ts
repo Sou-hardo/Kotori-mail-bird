@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { fetchAuthMutation } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../../convex/_generated/api";
 
 export async function POST(request: Request) {
   const { connectionId } = (await request.json()) as { connectionId?: string };
@@ -10,7 +10,7 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   return NextResponse.json(
-    await fetchAuthMutation(convexApi.domain.revokeConnection, {
+    await fetchAuthMutation(api.domain.revokeConnection, {
       id: connectionId,
     }),
   );

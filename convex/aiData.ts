@@ -40,6 +40,17 @@ export const replyContext = internalQuery({
     return { thread, messages, identity };
   },
 });
+export const latestAnalysisFor = internalQuery({
+  args: { threadId: v.id("emailThreads") },
+  handler: async (ctx, { threadId }) => {
+    const rows = await ctx.db
+      .query("threadAnalyses")
+      .withIndex("by_thread_created", (q) => q.eq("threadId", threadId))
+      .order("desc")
+      .take(1);
+    return rows[0]?.analysis ?? null;
+  },
+});
 export const saveAnalysis = internalMutation({
   args: { threadId: v.id("emailThreads"), result: v.any() },
   handler: async (ctx, { threadId, result }) => {
@@ -50,7 +61,7 @@ export const saveAnalysis = internalMutation({
       schemaVersion: "1",
       model,
       analysis: result,
-      safetyFlags: result.safetyFlags ?? [],
+      safetyFlags: result.reviewReasons ?? [],
       createdAt: now,
     });
     const old = await ctx.db
@@ -60,7 +71,7 @@ export const saveAnalysis = internalMutation({
     const c = {
       category: result.category ?? "UNKNOWN",
       confidence: Number(result.confidence ?? 0),
-      rationale: result.rationale,
+      rationale: result.summary,
       model,
       updatedAt: now,
     };
@@ -77,7 +88,7 @@ export const saveAnalysis = internalMutation({
       .unique();
     const sd = {
       summary: String(result.summary ?? ""),
-      requestedActions: result.requestedActions ?? [],
+      requestedActions: result.actions ?? [],
       model,
       updatedAt: now,
     };

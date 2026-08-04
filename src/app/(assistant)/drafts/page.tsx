@@ -1,10 +1,10 @@
 import Link from "next/link";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { fetchAuthQuery } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../convex/_generated/api";
 import { DraftAction } from "@/components/draft-action";
 export default async function DraftsPage() {
-  const drafts = await fetchAuthQuery(convexApi.domain.listDrafts, {});
+  const drafts = await fetchAuthQuery(api.domain.listDrafts, {});
   return (
     <div className="page-wrap">
       <header className="page-header">

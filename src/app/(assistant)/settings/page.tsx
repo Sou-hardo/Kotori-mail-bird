@@ -1,13 +1,13 @@
 import { fetchAuthQuery } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../convex/_generated/api";
 import { IdentityManager } from "@/components/identity-manager";
 import { MailboxCard, type MailboxConnection } from "@/components/mailbox-card";
 import { ReplyPreferenceControl } from "./reply-preference";
 export default async function SettingsPage() {
   const [identities, replyPreference, connections] = await Promise.all([
-    fetchAuthQuery(convexApi.domain.listIdentities, {}),
-    fetchAuthQuery(convexApi.domain.getReplyPreference, {}),
-    fetchAuthQuery(convexApi.domain.listConnections, {}),
+    fetchAuthQuery(api.domain.listIdentities, {}),
+    fetchAuthQuery(api.domain.getReplyPreference, {}),
+    fetchAuthQuery(api.domain.listConnections, {}),
   ]);
   return (
     <div className="page-wrap">

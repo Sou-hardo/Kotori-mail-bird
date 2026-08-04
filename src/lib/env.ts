@@ -5,7 +5,7 @@ const optionalNonEmptyString = z.preprocess(
   z.string().min(1).optional(),
 );
 
-const serverEnvSchema = z.object({
+export const serverEnvSchema = z.object({
   NEXT_PUBLIC_CONVEX_URL: z.string().url(),
   NEXT_PUBLIC_CONVEX_SITE_URL: z.string().url(),
   BETTER_AUTH_SECRET: z.string().min(32),
@@ -38,10 +38,4 @@ let cachedEnv: ServerEnv | undefined;
 export function getServerEnv(): ServerEnv {
   cachedEnv ??= serverEnvSchema.parse(process.env);
   return cachedEnv;
-}
-
-export function validateServerEnv(
-  values: Record<string, string | undefined>,
-): ServerEnv {
-  return serverEnvSchema.parse(values);
 }

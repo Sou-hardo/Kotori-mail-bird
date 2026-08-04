@@ -1,14 +1,23 @@
 import { ConvexHttpClient } from "convex/browser";
-import { convexApi } from "@/lib/convex-api";
-import { readinessResponse } from "@/lib/health-readiness";
+import { NextResponse } from "next/server";
+import { api } from "../../../../convex/_generated/api";
 
 export const dynamic = "force-dynamic";
 
-export function GET() {
-  return readinessResponse(() =>
-    new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!).query(
-      convexApi.health.ready,
+export async function GET() {
+  try {
+    await new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!).query(
+      api.health.ready,
       {},
-    ),
-  );
+    );
+    return NextResponse.json(
+      { status: "ready" },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  } catch {
+    return NextResponse.json(
+      { status: "unavailable" },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
+  }
 }

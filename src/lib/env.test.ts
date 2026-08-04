@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { validateServerEnv } from "./env";
+import { serverEnvSchema } from "./env";
 
 const valid = {
   NEXT_PUBLIC_CONVEX_URL: "https://example.convex.cloud",
@@ -20,19 +20,19 @@ const valid = {
 
 describe("server environment", () => {
   it("accepts a complete environment", () => {
-    expect(validateServerEnv(valid).NEXT_PUBLIC_CONVEX_URL).toBe(
+    expect(serverEnvSchema.parse(valid).NEXT_PUBLIC_CONVEX_URL).toBe(
       valid.NEXT_PUBLIC_CONVEX_URL,
     );
   });
 
   it("rejects a malformed encryption key", () => {
     expect(() =>
-      validateServerEnv({ ...valid, CREDENTIAL_ENCRYPTION_KEY: "short" }),
+      serverEnvSchema.parse({ ...valid, CREDENTIAL_ENCRYPTION_KEY: "short" }),
     ).toThrow();
   });
 
   it("treats empty optional VAPID values as unset", () => {
-    const result = validateServerEnv({
+    const result = serverEnvSchema.parse({
       ...valid,
       VAPID_PUBLIC_KEY: "",
       VAPID_PRIVATE_KEY: "",

@@ -1,5 +1,5 @@
 import { isAuthenticated, fetchAuthQuery } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../convex/_generated/api";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 
@@ -12,9 +12,9 @@ export default async function AssistantLayout({
 }) {
   if (!(await isAuthenticated())) redirect("/sign-in");
   const [principal, connections] = await Promise.all([
-    fetchAuthQuery(convexApi.domain.currentPrincipal, {}),
+    fetchAuthQuery(api.domain.currentPrincipal, {}),
     fetchAuthQuery(
-      convexApi.domain.listConnections,
+      api.domain.listConnections,
       {},
     ) as Promise<unknown> as Promise<ConnectionStatus[]>,
   ]);

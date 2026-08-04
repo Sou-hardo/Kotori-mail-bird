@@ -2,6 +2,11 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { dto, requirePrincipal } from "./principal";
+import { rules as reviewRules } from "../src/lib/ai/review-rules";
+import {
+  emailAddress as address,
+  replyAllRecipients,
+} from "../src/lib/gmail/recipients";
 
 // Same shape as dto(gmailConnections row) but never carries the encrypted
 // refresh token to a client.
@@ -421,34 +426,6 @@ export const latestAnalysis = query({
   },
 });
 
-const reviewRules: Array<[string, RegExp]> = [
-  [
-    "FINANCIAL_COMMITMENT",
-    /\b(?:pay|payment|invoice|refund|budget|price|cost|usd|eur|£|\$\d)\b/i,
-  ],
-  [
-    "LEGAL_OR_CONTRACT",
-    /\b(?:contract|agreement|terms|legal|liability|nda|indemnif|signature)\b/i,
-  ],
-  [
-    "RECRUITMENT",
-    /\b(?:candidate|interview|hire|hiring|offer|salary|recruit)\b/i,
-  ],
-  [
-    "COMPLAINT",
-    /\b(?:complaint|unacceptable|disappointed|escalat|dissatisfied|poor service)\b/i,
-  ],
-  [
-    "SENSITIVE_INFORMATION",
-    /\b(?:password|secret|ssn|social security|passport|medical|bank account|credit card|confidential)\b/i,
-  ],
-  [
-    "DEADLINE_OR_PROMISE",
-    /\b(?:deadline|due (?:by|on)|promise|guarantee|commit(?:ted)?|will (?:deliver|finish|send)|by (?:monday|tuesday|wednesday|thursday|friday|tomorrow|eod))\b/i,
-  ],
-];
-const address = (value: string) =>
-  (value.match(/<([^>]+)>/)?.[1] ?? value).trim().toLowerCase();
 export const replyAction = mutation({
   args: {
     id: v.string(),
@@ -496,17 +473,9 @@ export const replyAction = mutation({
         (message) => address(message.fromAddress) !== owner,
       );
       if (!inbound) throw new Error("no_reply_recipient");
-      const seen = new Set<string>();
-      const unique = (values: string[]) =>
-        values.filter((value) => {
-          const normalized = address(value);
-          if (!normalized || normalized === owner || seen.has(normalized))
-            return false;
-          seen.add(normalized);
-          return true;
-        });
-      const to = unique([inbound.fromAddress, ...inbound.toAddresses]);
-      const cc = unique(inbound.ccAddresses);
+      const recipients = replyAllRecipients(inbound, owner);
+      const to = recipients?.to ?? [];
+      const cc = recipients?.cc ?? [];
       if (!to.length) throw new Error("no_reply_recipient");
       const generation = option.generationId
         ? await ctx.db.get(option.generationId)

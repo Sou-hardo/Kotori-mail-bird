@@ -47,18 +47,17 @@ export function windowResetAt(windowStart: number, kind: WindowKind): number {
 function parsePositiveNumber(
   raw: string | undefined,
   fallback: number,
+  max?: number,
 ): number {
   if (raw === undefined) return fallback;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
+  if (!Number.isFinite(n) || n <= 0 || (max !== undefined && n > max))
+    return fallback;
   return n;
 }
 
 function parseSafetyMargin(raw: string | undefined, fallback: number): number {
-  if (raw === undefined) return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0 || n > 1) return fallback;
-  return n;
+  return parsePositiveNumber(raw, fallback, 1);
 }
 
 export interface QuotaBudgets {
@@ -116,23 +115,43 @@ export function checkBudgets(
   now: number,
   windows: QuotaWindows,
 ): QuotaDecision {
-  if (usage.dayUnits + units > budgets.dailyBudget)
-    return {
-      ok: false,
+  // Order is load-bearing: the first breach wins, so project_daily must be
+  // checked before the two minute-scoped windows.
+  const checks: {
+    reason: "project_daily" | "project_minute" | "user_minute";
+    used: number;
+    budget: number;
+    window: WindowKind;
+    windowStart: number;
+  }[] = [
+    {
       reason: "project_daily",
-      retryAfterMs: windowResetAt(windows.dayWindowStart, "day") - now,
-    };
-  if (usage.projectMinuteUnits + units > budgets.projectMinuteBudget)
-    return {
-      ok: false,
+      used: usage.dayUnits,
+      budget: budgets.dailyBudget,
+      window: "day",
+      windowStart: windows.dayWindowStart,
+    },
+    {
       reason: "project_minute",
-      retryAfterMs: windowResetAt(windows.minuteWindowStart, "minute") - now,
-    };
-  if (usage.minuteUnits + units > budgets.userMinuteBudget)
+      used: usage.projectMinuteUnits,
+      budget: budgets.projectMinuteBudget,
+      window: "minute",
+      windowStart: windows.minuteWindowStart,
+    },
+    {
+      reason: "user_minute",
+      used: usage.minuteUnits,
+      budget: budgets.userMinuteBudget,
+      window: "minute",
+      windowStart: windows.minuteWindowStart,
+    },
+  ];
+  const breach = checks.find((c) => c.used + units > c.budget);
+  if (breach)
     return {
       ok: false,
-      reason: "user_minute",
-      retryAfterMs: windowResetAt(windows.minuteWindowStart, "minute") - now,
+      reason: breach.reason,
+      retryAfterMs: windowResetAt(breach.windowStart, breach.window) - now,
     };
   return { ok: true };
 }

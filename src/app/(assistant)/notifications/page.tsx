@@ -1,9 +1,9 @@
 import { fetchAuthQuery } from "@/lib/auth-server";
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../convex/_generated/api";
 import { PushControl } from "@/components/push-control";
 export default async function NotificationsPage() {
-  const notes = await fetchAuthQuery(convexApi.domain.listNotifications, {});
+  const notes = await fetchAuthQuery(api.domain.listNotifications, {});
   return (
     <div className="page-wrap">
       <header className="page-header">

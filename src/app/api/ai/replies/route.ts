@@ -7,7 +7,7 @@ import {
   assertReviewAcknowledged,
 } from "@/lib/ai/safety";
 import { fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server";
-import { convexApi } from "@/lib/convex-api";
+import { api } from "../../../../../convex/_generated/api";
 import { latestInbound, replyAllRecipients } from "@/lib/gmail/recipients";
 
 export async function POST(request: Request) {
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
       );
     throw error;
   }
-  const thread = await fetchAuthQuery(convexApi.domain.getThread, {
+  const thread = await fetchAuthQuery(api.domain.getThread, {
     id: input.threadId,
   });
   if (!thread)
@@ -57,8 +57,8 @@ export async function POST(request: Request) {
       );
     throw error;
   }
-  const principal = await fetchAuthQuery(convexApi.domain.currentPrincipal, {});
-  const job = await fetchAuthMutation(convexApi.jobs.enqueue, {
+  const principal = await fetchAuthQuery(api.domain.currentPrincipal, {});
+  const job = await fetchAuthMutation(api.jobs.enqueue, {
     kind: "ai.reply.generate",
     input: { ...input, actorId: principal.userId },
     dedupeKey: `${input.threadId}:${crypto.randomUUID()}`,
@@ -81,7 +81,7 @@ export async function GET(request: Request) {
       { status: 400 },
     );
 
-  const job = await fetchAuthQuery(convexApi.jobs.result, { jobId, threadId });
+  const job = await fetchAuthQuery(api.jobs.result, { jobId, threadId });
   if (!job)
     return NextResponse.json({ error: "job_not_found" }, { status: 404 });
 
