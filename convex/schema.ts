@@ -156,7 +156,9 @@ export default defineSchema({
   emailMessages: defineTable({
     threadId: v.id("emailThreads"),
     gmailMessageId: v.string(),
-    internetMessageId: v.optional(v.string()),
+    // No internetMessageId column: it duplicated the RFC822 Message-ID that
+    // is already inside the encrypted `headers` blob, nothing ever read it,
+    // and in the clear it leaked the sending domain.
     fromAddress: v.string(), // enc
     toAddresses: v.optional(v.string()), // enc (JSON array)
     ccAddresses: v.optional(v.string()), // enc (JSON array)

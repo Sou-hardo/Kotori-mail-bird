@@ -271,7 +271,6 @@ export const saveMessage = internalMutation({
     const messageData = {
       threadId: thread._id,
       gmailMessageId: message.id,
-      internetMessageId: header(message.payload?.headers, "Message-ID"),
       sentAt,
       ...(await encryptMessage(box, {
         fromAddress: header(message.payload?.headers, "From") ?? "",
